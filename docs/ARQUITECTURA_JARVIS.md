@@ -43,7 +43,7 @@ El sistema sigue una arquitectura **Hub-and-Spoke** donde todo el procesamiento 
 
 | Dispositivo | Rol y Mecanismo de Activación | Transporte |
 | :--- | :--- | :--- |
-| **Laptop** | Cliente ligero de escritorio para audio, texto y comandos remotos. | WebSocket sobre Tailscale |
+| **Laptop (`DESKTOP-ANNU1GG`)** | Windows, Intel Core i5-10300H @ 2.50GHz, ~20 GB RAM. Cliente ligero de escritorio para audio, texto y comandos remotos (con `openWakeWord` + `Silero VAD` opcional en CPU). | WebSocket sobre Tailscale |
 | **Samsung Galaxy S24+** | Cliente móvil principal. Integración con **One UI Rutinas** y `ForegroundService` persistente para mantener la conexión y el puente de audio/notificaciones. | WebSocket sobre Tailscale |
 | **Galaxy Watch 7** | **Wear OS 5**. Activación bajo demanda mediante **Tile** o **botón físico** (sin escucha pasiva para preservar batería). | Puente vía S24+ / Tailscale |
 | **Android Auto** | Interacción manos libres en vehículo mediante puente **Bluetooth HFP/A2DP** gestionado desde el Galaxy S24+. | BT HFP/A2DP → S24+ → Hub |

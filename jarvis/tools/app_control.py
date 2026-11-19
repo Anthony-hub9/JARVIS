@@ -38,6 +38,22 @@ PROTECTED_SYSTEM_PROCESSES: frozenset[str] = frozenset(
     }
 )
 
+PROCESS_ALIASES: dict[str, str] = {
+    "calculadora": "calculatorapp.exe",
+    "calculator": "calculatorapp.exe",
+    "calc": "calculatorapp.exe",
+    "cliente de riot": "riotclientservices.exe",
+    "riot client": "riotclientservices.exe",
+    "riot": "riotclientservices.exe",
+    "microsoft edge": "msedge.exe",
+    "edge": "msedge.exe",
+    "visual studio code": "code.exe",
+    "vscode": "code.exe",
+    "word": "winword.exe",
+    "excel": "excel.exe",
+    "powerpoint": "powerpnt.exe",
+}
+
 MOBILE_APP_PACKAGES: dict[str, str] = {
     "spotify": "com.spotify.music",
     "discord": "com.discord",
@@ -69,6 +85,18 @@ MOBILE_APP_PACKAGES: dict[str, str] = {
     "messages": "com.samsung.android.messaging",
     "calendario": "com.samsung.android.calendar",
     "calendar": "com.samsung.android.calendar",
+}
+
+MOBILE_WEB_SCHEMES: dict[str, str] = {
+    "whatsapp": "whatsapp://",
+    "spotify": "spotify://",
+    "youtube": "https://www.youtube.com",
+    "maps": "https://maps.google.com",
+    "instagram": "instagram://",
+    "gmail": "mailto:",
+    "telefono": "tel:",
+    "teléfono": "tel:",
+    "phone": "tel:",
 }
 
 _SAFE_APP_NAME_RE = re.compile(r"^[a-zA-Z0-9 ._\-+()]+$")
@@ -333,31 +361,34 @@ class AppController:
         if key in PROTECTED_SYSTEM_PROCESSES or f"{key}.exe" in PROTECTED_SYSTEM_PROCESSES:
             raise ValueError(f"Refusing to close protected system process '{key}.exe'.")
 
-        entry = self._resolve_entry(key)
-        if entry is not None:
-            matched_key, cmd = entry
-            if len(cmd) >= 2 and cmd[1].startswith("shell:AppsFolder\\"):
-                proc_name = f"{matched_key}.exe"
-            else:
-                candidate = Path(cmd[-1]).name
-                if candidate.lower().endswith(".exe"):
-                    proc_name = candidate.lower()
-                elif candidate.lower().endswith(".lnk"):
-                    proc_name = f"{Path(cmd[-1]).stem.lower()}.exe"
-                else:
-                    proc_name = f"{matched_key}.exe"
+        if key in PROCESS_ALIASES:
+            proc_name = PROCESS_ALIASES[key]
         else:
-            proc_name = raw.lower() if raw.lower().endswith(".exe") else f"{key}.exe"
+            entry = self._resolve_entry(key)
+            if entry is not None:
+                matched_key, cmd = entry
+                if len(cmd) >= 2 and cmd[1].startswith("shell:AppsFolder\\"):
+                    proc_name = f"{matched_key}.exe"
+                else:
+                    candidate = Path(cmd[-1]).name
+                    if candidate.lower().endswith(".exe"):
+                        proc_name = candidate.lower()
+                    elif candidate.lower().endswith(".lnk"):
+                        proc_name = f"{Path(cmd[-1]).stem.lower()}.exe"
+                    else:
+                        proc_name = f"{matched_key}.exe"
+            else:
+                proc_name = raw.lower() if raw.lower().endswith(".exe") else f"{key}.exe"
 
         if proc_name in PROTECTED_SYSTEM_PROCESSES or _normalize_key(proc_name) in PROTECTED_SYSTEM_PROCESSES:
             raise ValueError(f"Refusing to close protected system process '{proc_name}'.")
         return proc_name
 
     def _find_running_uwp_process(self, key: str, tried_proc: str) -> str | None:
-        """Find a running process matching a UWP app key (e.g. WhatsApp.Root.exe)."""
+        """Find a running process matching a UWP app key or window title."""
         try:
             tl = subprocess.run(
-                ["tasklist", "/FO", "CSV", "/NH"],
+                ["tasklist", "/V", "/FO", "CSV", "/NH"],
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
@@ -375,6 +406,19 @@ class AppController:
         if not compact_key:
             return None
 
+        def _matches(candidate: str) -> bool:
+            if not candidate:
+                return False
+            compact_cand = re.sub(r"[^a-z0-9]", "", candidate)
+            if not compact_cand:
+                return False
+            return (
+                candidate == key
+                or candidate.startswith(f"{key}.")
+                or compact_cand.startswith(compact_key)
+                or (len(compact_key) >= 4 and compact_key in compact_cand)
+            )
+
         for row in csv.reader(io.StringIO(tl.stdout)):
             if not row:
                 continue
@@ -384,13 +428,8 @@ class AppController:
             if image in PROTECTED_SYSTEM_PROCESSES or _normalize_key(image) in PROTECTED_SYSTEM_PROCESSES:
                 continue
             norm_img = _normalize_key(image)
-            compact_img = re.sub(r"[^a-z0-9]", "", norm_img)
-            if (
-                norm_img == key
-                or norm_img.startswith(f"{key}.")
-                or compact_img.startswith(compact_key)
-                or (len(compact_key) >= 4 and compact_key in compact_img)
-            ):
+            window_title = row[-1].strip().lower() if len(row) > 1 else ""
+            if _matches(norm_img) or _matches(window_title):
                 return image
         return None
 
@@ -430,14 +469,18 @@ def build_mobile_intent(app_name: str) -> dict[str, Any]:
     if key not in MOBILE_APP_PACKAGES:
         raise ValueError(f"Mobile application '{app_name}' is not supported.")
     package = MOBILE_APP_PACKAGES[key]
+    if key in MOBILE_WEB_SCHEMES:
+        intent_url = MOBILE_WEB_SCHEMES[key]
+        requires_native_bridge = False
+    else:
+        intent_url = ""
+        requires_native_bridge = True
     return {
         "device": "s24_plus",
         "action": "android.intent.action.MAIN",
         "category": "android.intent.category.LAUNCHER",
         "package": package,
         "app_name": key,
-        "intent_url": (
-            "intent:#Intent;action=android.intent.action.MAIN;"
-            f"category=android.intent.category.LAUNCHER;package={package};end"
-        ),
+        "intent_url": intent_url,
+        "requires_native_bridge": requires_native_bridge,
     }

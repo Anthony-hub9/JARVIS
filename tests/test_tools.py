@@ -93,11 +93,18 @@ def test_build_mobile_intent_for_s24_plus() -> None:
         "category": "android.intent.category.LAUNCHER",
         "package": "com.spotify.music",
         "app_name": "spotify",
-        "intent_url": (
-            "intent:#Intent;action=android.intent.action.MAIN;"
-            "category=android.intent.category.LAUNCHER;package=com.spotify.music;end"
-        ),
+        "intent_url": "spotify://",
+        "requires_native_bridge": False,
     }
+
+
+def test_build_mobile_intent_whatsapp_s24_plus() -> None:
+    intent = build_mobile_intent("WhatsApp")
+
+    assert intent["package"] == "com.whatsapp"
+    assert intent["app_name"] == "whatsapp"
+    assert intent["intent_url"] == "whatsapp://"
+    assert intent["requires_native_bridge"] is False
 
 
 def test_build_mobile_intent_calculadora_s24_plus() -> None:
@@ -105,11 +112,8 @@ def test_build_mobile_intent_calculadora_s24_plus() -> None:
 
     assert intent["package"] == "com.sec.android.app.popupcalculator"
     assert intent["app_name"] == "calculadora"
-    assert intent["intent_url"] == (
-        "intent:#Intent;action=android.intent.action.MAIN;"
-        "category=android.intent.category.LAUNCHER;"
-        "package=com.sec.android.app.popupcalculator;end"
-    )
+    assert intent["intent_url"] == ""
+    assert intent["requires_native_bridge"] is True
 
 
 def test_build_mobile_intent_rejects_unknown_app() -> None:
@@ -192,7 +196,7 @@ def test_close_app_uwp_fallback_to_running_root_process() -> None:
     assert res["process"] == "whatsapp.root.exe"
     assert res["returncode"] == 0
     assert run_mock.call_args_list[0].args[0] == ["taskkill", "/IM", "whatsapp.exe", "/F"]
-    assert run_mock.call_args_list[1].args[0] == ["tasklist", "/FO", "CSV", "/NH"]
+    assert run_mock.call_args_list[1].args[0] == ["tasklist", "/V", "/FO", "CSV", "/NH"]
     assert run_mock.call_args_list[2].args[0] == ["taskkill", "/IM", "whatsapp.root.exe", "/F"]
 
 
@@ -244,13 +248,23 @@ def test_fuzzy_resolve_unknown_app_raises_value_error() -> None:
 def test_close_app_fuzzy_match_lnk_and_tasklist_fallback() -> None:
     controller = AppController(allowlist={}, discover=False)
     controller._discovered = {
-        "riot client": ["cmd", "/c", "start", "", r"C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Riot Client.lnk"],
+        "epic games launcher": [
+            "cmd",
+            "/c",
+            "start",
+            "",
+            r"C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Epic Games Launcher.lnk",
+        ],
     }
 
-    not_found = SimpleNamespace(returncode=128, stdout="", stderr='ERROR: The process "riot client.exe" not found.')
+    not_found = SimpleNamespace(
+        returncode=128,
+        stdout="",
+        stderr='ERROR: The process "epic games launcher.exe" not found.',
+    )
     tasklist_ok = SimpleNamespace(
         returncode=0,
-        stdout='"RiotClientServices.exe","4321","Console","1","90,000 K"\n',
+        stdout='"EpicGamesLauncher.exe","4321","Console","1","90,000 K","Running","USER","0:00:01","Epic Games"\n',
         stderr="",
     )
     killed_ok = SimpleNamespace(returncode=0, stdout="SUCCESS", stderr="")
@@ -259,10 +273,53 @@ def test_close_app_fuzzy_match_lnk_and_tasklist_fallback() -> None:
         "jarvis.tools.app_control.subprocess.run",
         side_effect=[not_found, tasklist_ok, killed_ok],
     ) as run_mock:
-        res = controller.close_app("riot")
+        res = controller.close_app("epic")
 
-    assert res["process"] == "riotclientservices.exe"
+    assert res["process"] == "epicgameslauncher.exe"
     assert res["returncode"] == 0
-    assert run_mock.call_args_list[0].args[0] == ["taskkill", "/IM", "riot client.exe", "/F"]
-    assert run_mock.call_args_list[1].args[0] == ["tasklist", "/FO", "CSV", "/NH"]
-    assert run_mock.call_args_list[2].args[0] == ["taskkill", "/IM", "riotclientservices.exe", "/F"]
+    assert run_mock.call_args_list[0].args[0] == ["taskkill", "/IM", "epic games launcher.exe", "/F"]
+    assert run_mock.call_args_list[1].args[0] == ["tasklist", "/V", "/FO", "CSV", "/NH"]
+    assert run_mock.call_args_list[2].args[0] == ["taskkill", "/IM", "epicgameslauncher.exe", "/F"]
+
+
+def test_close_app_calculadora_resolves_process_alias() -> None:
+    controller = AppController(allowlist={}, discover=False)
+    fake_done = SimpleNamespace(returncode=0, stdout="SUCCESS", stderr="")
+
+    with patch("jarvis.tools.app_control.subprocess.run", return_value=fake_done) as run_mock:
+        res = controller.close_app("calculadora")
+
+    run_mock.assert_called_once_with(
+        ["taskkill", "/IM", "calculatorapp.exe", "/F"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert res["process"] == "calculatorapp.exe"
+    assert res["returncode"] == 0
+
+
+def test_close_app_tasklist_v_window_title_match() -> None:
+    controller = AppController(allowlist={}, discover=False)
+    tasklist_ok = SimpleNamespace(
+        returncode=0,
+        stdout=(
+            '"explorer.exe","1234","Console","1","50,000 K","Running","USER","0:00:01","Calculadora"\n'
+            '"CalculatorApp.exe","5678","Console","1","45,000 K","Running","USER","0:00:01","Calculadora"\n'
+        ),
+        stderr="",
+    )
+
+    with patch("jarvis.tools.app_control.subprocess.run", return_value=tasklist_ok) as run_mock:
+        proc = controller._find_running_uwp_process("calculadora", "calculadora.exe")
+
+    run_mock.assert_called_once_with(
+        ["tasklist", "/V", "/FO", "CSV", "/NH"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=5,
+        check=False,
+    )
+    assert proc == "calculatorapp.exe"

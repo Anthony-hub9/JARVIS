@@ -515,7 +515,8 @@ async def test_fast_command_router_s24_plus_builds_mobile_intent_without_laptop_
         assert res.tool_result["tool"] == "app_launch"
         assert res.tool_result["intent"]["package"] == "com.sec.android.app.popupcalculator"
         assert "intent_url" in res.tool_result["intent"]
-        assert res.tool_result["intent"]["intent_url"].startswith("intent:")
+        assert res.tool_result["intent"]["intent_url"] == ""
+        assert res.tool_result["intent"]["requires_native_bridge"] is True
         app_controller.launch_app.assert_not_called()
         assert len(backend.calls) == 0
     finally:

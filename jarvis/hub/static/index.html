@@ -449,6 +449,17 @@
       box-shadow: 0 0 20px rgba(0, 212, 255, 0.35);
     }
 
+    .intent-bridge-note {
+      margin-top: 8px;
+      padding: 10px 14px;
+      border-radius: 12px;
+      background: rgba(255, 193, 7, 0.12);
+      border: 1px solid rgba(255, 193, 7, 0.45);
+      color: #ffe8a3;
+      font-size: 13px;
+      line-height: 1.4;
+    }
+
     .quick-bar {
       display: flex;
       gap: 7px;
@@ -945,6 +956,13 @@
             } catch (_err) {
               // Ignore navigation errors when blocked or outside Android Chrome.
             }
+          } else if (intent?.requires_native_bridge) {
+            const bridgeNote = document.createElement("div");
+            bridgeNote.className = "intent-bridge-note";
+            const appLabel = intent.app_name || "esta aplicación";
+            bridgeNote.textContent =
+              `ℹ ${appLabel} es una app del sistema sin esquema web BROWSABLE: requiere el puente nativo (app Android Fase 2 / Tasker) para abrirse en S24+.`;
+            wrap.appendChild(bridgeNote);
           }
         }
 

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import csv
+import io
+import json
 import os
 import re
 import shutil
@@ -113,8 +116,56 @@ def _scan_registry_app_paths() -> dict[str, list[str]]:
     return discovered
 
 
+def _scan_start_apps(timeout: float = 5.0) -> dict[str, list[str]]:
+    """Discover Microsoft Store / UWP and Start Apps via PowerShell Get-StartApps."""
+    discovered: dict[str, list[str]] = {}
+    try:
+        result = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-Command",
+                "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Get-StartApps | ConvertTo-Json -Compress",
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return discovered
+
+    if result.returncode != 0 or not result.stdout or not result.stdout.strip():
+        return discovered
+
+    try:
+        payload = json.loads(result.stdout)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return discovered
+
+    items = [payload] if isinstance(payload, dict) else payload
+    if not isinstance(items, list):
+        return discovered
+
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("Name")
+        app_id = item.get("AppID")
+        if not isinstance(name, str) or not isinstance(app_id, str):
+            continue
+        key = _normalize_key(name)
+        cleaned_id = app_id.strip()
+        if key and cleaned_id and key not in discovered:
+            discovered[key] = ["explorer.exe", f"shell:AppsFolder\\{cleaned_id}"]
+
+    return discovered
+
+
 def discover_windows_apps() -> dict[str, list[str]]:
-    """Discover launchable Windows apps from Start Menu, Program Files, and Registry."""
+    """Discover launchable Windows apps from Start Menu, Program Files, Registry, and Start Apps."""
     apps: dict[str, list[str]] = {}
 
     start_dirs = [
@@ -143,6 +194,9 @@ def discover_windows_apps() -> dict[str, list[str]]:
         apps.setdefault(k, cmd)
 
     for k, cmd in _scan_registry_app_paths().items():
+        apps.setdefault(k, cmd)
+
+    for k, cmd in _scan_start_apps().items():
         apps.setdefault(k, cmd)
 
     return apps
@@ -201,17 +255,56 @@ class AppController:
         key = _normalize_key(raw)
         cmd = self.allowlist.get(key) or self._discovered.get(key)
         if cmd:
-            candidate = Path(cmd[-1]).name
-            if candidate.lower().endswith(".exe"):
-                proc_name = candidate.lower()
-            else:
+            if len(cmd) >= 2 and cmd[1].startswith("shell:AppsFolder\\"):
                 proc_name = f"{key}.exe"
+            else:
+                candidate = Path(cmd[-1]).name
+                if candidate.lower().endswith(".exe"):
+                    proc_name = candidate.lower()
+                else:
+                    proc_name = f"{key}.exe"
         else:
             proc_name = raw.lower() if raw.lower().endswith(".exe") else f"{key}.exe"
 
         if proc_name in PROTECTED_SYSTEM_PROCESSES or _normalize_key(proc_name) in PROTECTED_SYSTEM_PROCESSES:
             raise ValueError(f"Refusing to close protected system process '{proc_name}'.")
         return proc_name
+
+    def _find_running_uwp_process(self, key: str, tried_proc: str) -> str | None:
+        """Find a running process matching a UWP app key (e.g. WhatsApp.Root.exe)."""
+        try:
+            tl = subprocess.run(
+                ["tasklist", "/FO", "CSV", "/NH"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=5,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+
+        if tl.returncode != 0 or not tl.stdout:
+            return None
+
+        compact_key = re.sub(r"[^a-z0-9]", "", key)
+        if not compact_key:
+            return None
+
+        for row in csv.reader(io.StringIO(tl.stdout)):
+            if not row:
+                continue
+            image = row[0].strip().lower()
+            if not image.endswith(".exe") or image == tried_proc:
+                continue
+            if image in PROTECTED_SYSTEM_PROCESSES or _normalize_key(image) in PROTECTED_SYSTEM_PROCESSES:
+                continue
+            norm_img = _normalize_key(image)
+            compact_img = re.sub(r"[^a-z0-9]", "", norm_img)
+            if norm_img == key or norm_img.startswith(f"{key}.") or compact_img.startswith(compact_key):
+                return image
+        return None
 
     def close_app(self, app_name: str) -> dict[str, Any]:
         """Safely terminate a non-system Windows process via taskkill."""
@@ -222,6 +315,19 @@ class AppController:
             text=True,
             check=False,
         )
+        if result.returncode != 0:
+            key = _normalize_key(app_name)
+            cmd = self.allowlist.get(key) or self._discovered.get(key)
+            if cmd and len(cmd) >= 2 and cmd[1].startswith("shell:AppsFolder\\"):
+                alt_proc = self._find_running_uwp_process(key, proc_name)
+                if alt_proc:
+                    proc_name = alt_proc
+                    result = subprocess.run(
+                        ["taskkill", "/IM", proc_name, "/F"],
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
         return {
             "process": proc_name,
             "returncode": result.returncode,

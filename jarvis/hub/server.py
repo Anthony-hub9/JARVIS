@@ -69,6 +69,7 @@ def get_orchestrator() -> DualAgentOrchestrator:
         max_retries=settings.max_supervisor_retries,
         agenda_store=get_agenda_store(),
         app_controller=get_app_controller(),
+        fast_supervisor=settings.fast_supervisor,
     )
 
 

@@ -39,7 +39,7 @@ def test_health_endpoint() -> None:
     data = resp.json()
     assert data["status"] == "ok"
     assert data["backend"] == "ollama"
-    assert data["executor"] == "qwen2.5:3b"
+    assert data["executor"] == "qwen2.5:1.5b"
     assert data["supervisor"] == "qwen2.5:1.5b"
     assert data["vision"] == "moondream"
 
@@ -114,7 +114,7 @@ def test_websocket_chat_agenda_and_game_frame() -> None:
                 ws.send_text(json.dumps({"type": "game_frame", "prompt": "¿Qué hago?"}))
                 no_img_resp = ws.receive_json()
                 assert no_img_resp["approved"] is True
-                assert fake_backend.calls[8][0] == "qwen2.5:3b"
+                assert fake_backend.calls[8][0] == "qwen2.5:1.5b"
                 assert fake_backend.calls[8][2] is None
     finally:
         store.close()

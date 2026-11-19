@@ -10,6 +10,7 @@ from jarvis.tools.agenda import AgendaStore
 from jarvis.tools.app_control import AppController, build_mobile_intent
 
 MOBILE_DEVICE_IDS = {"s24", "s24_plus", "mobile", "android"}
+SAFE_FAST_TOOLS = {"agenda_add", "agenda_list", "agenda_upcoming", "app_launch"}
 _JSON_FENCE_RE = re.compile(r"^```(?:json)?\s*(.*?)\s*```$", re.DOTALL | re.IGNORECASE)
 
 
@@ -82,6 +83,7 @@ class DualAgentOrchestrator:
         max_retries: int = settings.max_supervisor_retries,
         agenda_store: AgendaStore | None = None,
         app_controller: AppController | None = None,
+        fast_supervisor: bool = False,
     ) -> None:
         self.backend: AgentBackend = backend or OllamaBackend()
         self.executor_model = executor_model
@@ -90,6 +92,7 @@ class DualAgentOrchestrator:
         self.max_retries = max_retries
         self.agenda_store = agenda_store
         self.app_controller = app_controller or AppController()
+        self.fast_supervisor = fast_supervisor
 
     async def run(
         self,
@@ -114,11 +117,19 @@ class DualAgentOrchestrator:
             else:
                 candidate = await self.backend.generate(self.executor_model, exec_prompt)
 
-            sup_prompt = self._build_supervisor_prompt(effective_input, device_id, candidate)
-            verdict = (await self.backend.generate(self.supervisor_model, sup_prompt)).strip()
+            tool_call = _parse_tool_call(candidate)
+            fast_approved = self.fast_supervisor and (
+                tool_call is None or tool_call["tool"].strip().lower() in SAFE_FAST_TOOLS
+            )
+            if fast_approved:
+                approved = True
+                verdict = "APPROVED"
+            else:
+                sup_prompt = self._build_supervisor_prompt(effective_input, device_id, candidate)
+                verdict = (await self.backend.generate(self.supervisor_model, sup_prompt)).strip()
+                approved = verdict.upper().startswith("APPROVED")
 
-            if verdict.upper().startswith("APPROVED"):
-                tool_call = _parse_tool_call(candidate)
+            if approved:
                 if tool_call is not None:
                     response_text, tool_result = self._execute_tool(tool_call, device_id)
                     return OrchestratorResult(

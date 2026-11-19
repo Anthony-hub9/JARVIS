@@ -11,8 +11,10 @@ from jarvis.tools.agenda import AgendaStore
 class MockBackend:
     def __init__(self, responses: list[str]) -> None:
         self._responses = iter(responses)
+        self.calls: list[tuple[str, str]] = []
 
     async def generate(self, model: str, prompt: str) -> str:
+        self.calls.append((model, prompt))
         return next(self._responses)
 
 
@@ -73,8 +75,9 @@ async def test_orchestrator_trips_circuit_breaker_after_max_retries() -> None:
 
 def test_settings_and_orchestrator_use_ollama_only() -> None:
     cfg = Settings(_env_file=None)
-    assert cfg.executor_model == "qwen2.5:3b"
+    assert cfg.executor_model == "qwen2.5:1.5b"
     assert cfg.supervisor_model == "qwen2.5:1.5b"
+    assert cfg.fast_supervisor is True
     assert cfg.vision_model == "moondream"
     assert cfg.ollama_base_url == "http://localhost:11434"
     assert not hasattr(cfg, "gemini_api_key")
@@ -219,3 +222,62 @@ async def test_orchestrator_routes_images_to_vision_model() -> None:
     assert backend.calls[0][2] == ["ZmFrZV9mcmFtZQ=="]
     assert backend.calls[1][0] == "qwen2.5:1.5b"
     assert backend.calls[1][2] is None
+
+
+@pytest.mark.asyncio
+async def test_fast_supervisor_approves_plain_chat_and_safe_tools_in_one_call() -> None:
+    store = AgendaStore(":memory:")
+    try:
+        backend = MockBackend(
+            [
+                "Hola, ¿en qué puedo ayudarte?",
+                '{"tool": "app_launch", "app_name": "notepad"}',
+                '{"tool": "agenda_add", "title": "Cita", "when": "2099-01-01T10:00:00"}',
+            ]
+        )
+        orch = DualAgentOrchestrator(backend=backend, agenda_store=store, fast_supervisor=True)
+
+        chat_res = await orch.run("Hola", device_id="pc")
+        assert chat_res.approved is True
+        assert chat_res.attempts == 1
+        assert chat_res.response == "Hola, ¿en qué puedo ayudarte?"
+        assert len(backend.calls) == 1
+
+        with patch("jarvis.tools.app_control.subprocess.Popen", return_value=MagicMock()):
+            launch_res = await orch.run("Abre notepad", device_id="pc")
+        assert launch_res.approved is True
+        assert launch_res.tool_result == {"tool": "app_launch", "app_name": "notepad", "device": "pc"}
+        assert len(backend.calls) == 2
+
+        agenda_res = await orch.run("Agenda cita", device_id="pc")
+        assert agenda_res.approved is True
+        assert agenda_res.tool_result is not None
+        assert agenda_res.tool_result["event"]["title"] == "Cita"
+        assert len(backend.calls) == 3
+    finally:
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_fast_supervisor_still_invokes_supervisor_for_app_close() -> None:
+    backend = MockBackend(
+        [
+            '{"tool": "app_close", "app_name": "notepad"}',
+            "APPROVED",
+        ]
+    )
+    orch = DualAgentOrchestrator(
+        backend=backend,
+        executor_model="qwen2.5:1.5b",
+        supervisor_model="qwen2.5:1.5b",
+        fast_supervisor=True,
+    )
+
+    fake_done = MagicMock(returncode=0, stdout="SUCCESS", stderr="")
+    with patch("jarvis.tools.app_control.subprocess.run", return_value=fake_done):
+        res = await orch.run("Cierra notepad", device_id="pc")
+
+    assert res.approved is True
+    assert res.tool_result is not None
+    assert res.tool_result["tool"] == "app_close"
+    assert len(backend.calls) == 2

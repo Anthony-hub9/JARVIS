@@ -11,7 +11,7 @@ from jarvis.tools.app_control import AppController, build_mobile_intent
 from jarvis.tools.memory import MemoryStore, MemoryTurn
 from jarvis.tools.web_search import WebSearchTool
 
-MOBILE_DEVICE_IDS = {"s24", "s24_plus", "mobile", "android"}
+MOBILE_DEVICE_IDS = {"s24", "s24_plus", "s24-plus", "mobile", "android", "phone", "galaxy-s24", "galaxy_s24"}
 SAFE_FAST_TOOLS = {
     "agenda_add",
     "agenda_list",
@@ -293,7 +293,8 @@ class DualAgentOrchestrator:
                     {"tool": tool_name, "error": "Missing app_name"},
                 )
             try:
-                if device_id.strip().lower() in MOBILE_DEVICE_IDS:
+                normalized_device = device_id.strip().lower().replace("-", "_")
+                if normalized_device in MOBILE_DEVICE_IDS:
                     intent = build_mobile_intent(app_name)
                     return (
                         f"Intent generado para abrir {intent['app_name']} en {device_id}.",

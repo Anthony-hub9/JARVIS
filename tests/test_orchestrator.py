@@ -493,3 +493,30 @@ async def test_fast_command_router_agenda_list_without_llm() -> None:
         assert len(backend.calls) == 0
     finally:
         store.close()
+
+
+@pytest.mark.asyncio
+async def test_fast_command_router_s24_plus_builds_mobile_intent_without_laptop_launch() -> None:
+    memory = MemoryStore(":memory:")
+    backend = MockBackend([])
+    app_controller = MagicMock()
+    try:
+        orch = DualAgentOrchestrator(
+            backend=backend,
+            app_controller=app_controller,
+            memory_store=memory,
+            fast_supervisor=True,
+        )
+
+        res = await orch.run("abre la calculadora", device_id="s24-plus")
+        assert res.approved is True
+        assert res.attempts == 1
+        assert res.tool_result is not None
+        assert res.tool_result["tool"] == "app_launch"
+        assert res.tool_result["intent"]["package"] == "com.sec.android.app.popupcalculator"
+        assert "intent_url" in res.tool_result["intent"]
+        assert res.tool_result["intent"]["intent_url"].startswith("intent:")
+        app_controller.launch_app.assert_not_called()
+        assert len(backend.calls) == 0
+    finally:
+        memory.close()

@@ -639,6 +639,7 @@
           <option value="laptop">Laptop</option>
           <option value="s24-plus">Galaxy S24+</option>
         </select>
+        <button id="wakeWordToggle" class="hud-btn" type="button" aria-pressed="false" aria-label="Escucha continua: Jarvis" title="Escucha continua: Jarvis">🎙️ Jarvis: OFF</button>
         <button id="ttsToggle" class="hud-btn active" type="button" title="Activar o silenciar voz de JARVIS">🔊 Voz</button>
       </div>
     </header>
@@ -727,6 +728,7 @@
       const statusDot = document.getElementById("statusDot");
       const statusText = document.getElementById("statusText");
       const deviceSelect = document.getElementById("deviceSelect");
+      const wakeWordToggle = document.getElementById("wakeWordToggle");
       const ttsToggle = document.getElementById("ttsToggle");
 
       const healthBackend = document.getElementById("healthBackend");
@@ -763,6 +765,10 @@
       let activeAudioUrl = null;
       let upcomingOnly = false;
       let cachedApps = [];
+      let recognition = null;
+      let listening = false;
+      let wakeWordEnabled = false;
+      let wakeRestartTimer = null;
 
       const savedDevice = localStorage.getItem("jarvis_device_id");
       if (savedDevice && (savedDevice === "laptop" || savedDevice === "s24-plus")) {
@@ -772,8 +778,24 @@
       }
 
       function setOrbState(state) {
+        const prevState = reactorOrb.getAttribute("data-state");
         reactorOrb.setAttribute("data-state", state);
         hudStateLabel.textContent = state.toUpperCase();
+        if (state === "speaking") {
+          if (wakeRestartTimer) {
+            clearTimeout(wakeRestartTimer);
+            wakeRestartTimer = null;
+          }
+          if (recognition && listening) {
+            try {
+              recognition.abort();
+            } catch {
+              // Ignore abort errors if recognition already stopped
+            }
+          }
+        } else if (state === "idle" && prevState === "speaking" && wakeWordEnabled && !listening) {
+          scheduleWakeRestart(300);
+        }
       }
 
       function setStatus(stateClass, text) {
@@ -1104,17 +1126,46 @@
         updateTtsButton();
       });
 
-      // Voice Input (STT)
+      // Voice Input (STT) & Always-On Wake Word
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-      let recognition = null;
-      let listening = false;
+      const WAKE_WORD_REGEX = /\b[jyhg]ar[vb]i[sz]?\b/i;
+
+      function updateWakeWordButton() {
+        wakeWordToggle.classList.toggle("active", wakeWordEnabled);
+        wakeWordToggle.setAttribute("aria-pressed", wakeWordEnabled ? "true" : "false");
+        wakeWordToggle.textContent = wakeWordEnabled ? "🎙️ Jarvis: ON" : "🎙️ Jarvis: OFF";
+      }
+
+      function scheduleWakeRestart(delay = 300) {
+        if (wakeRestartTimer) {
+          clearTimeout(wakeRestartTimer);
+          wakeRestartTimer = null;
+        }
+        if (!wakeWordEnabled || !recognition) return;
+        wakeRestartTimer = setTimeout(() => {
+          wakeRestartTimer = null;
+          if (!wakeWordEnabled || listening) return;
+          if (reactorOrb.getAttribute("data-state") === "speaking") return;
+          try {
+            recognition.continuous = true;
+            recognition.interimResults = false;
+            recognition.start();
+          } catch {
+            // Ignore InvalidStateError if already running
+          }
+        }, delay);
+      }
 
       if (!SpeechRecognition) {
         micBtn.disabled = true;
         micBtn.title = "Entrada de voz no soportada en este navegador.";
+        wakeWordToggle.disabled = true;
+        wakeWordToggle.title = "Escucha continua no soportada en este navegador.";
       } else if (!window.isSecureContext) {
         micBtn.disabled = true;
         micBtn.title = "El micrófono requiere HTTPS o localhost.";
+        wakeWordToggle.disabled = true;
+        wakeWordToggle.title = "Escucha continua requiere HTTPS o localhost.";
       } else {
         recognition = new SpeechRecognition();
         recognition.lang = "es-MX";
@@ -1135,22 +1186,42 @@
             setOrbState("idle");
           }
           micBtn.title = "Hablar con JARVIS";
+          if (wakeWordEnabled && reactorOrb.getAttribute("data-state") !== "speaking") {
+            scheduleWakeRestart(300);
+          }
         };
 
         recognition.onresult = (event) => {
-          const transcript = event.results[0]?.[0]?.transcript || "";
-          if (transcript.trim()) {
-            sendMessage(transcript);
+          if (reactorOrb.getAttribute("data-state") === "speaking") return;
+          for (let i = event.resultIndex; i < event.results.length; i++) {
+            const result = event.results[i];
+            if (!result.isFinal) continue;
+            const transcript = (result[0]?.transcript || "").trim();
+            if (!transcript) continue;
+            if (wakeWordEnabled) {
+              if (WAKE_WORD_REGEX.test(transcript)) {
+                setOrbState("listening");
+                sendMessage(transcript || "Jarvis");
+              }
+            } else {
+              sendMessage(transcript);
+            }
           }
         };
 
         recognition.onerror = (event) => {
           listening = false;
           micBtn.classList.remove("listening");
-          setOrbState("idle");
+          if (reactorOrb.getAttribute("data-state") === "listening") {
+            setOrbState("idle");
+          }
           if (event.error === "not-allowed" || event.error === "service-not-allowed") {
+            wakeWordEnabled = false;
+            updateWakeWordButton();
             micBtn.disabled = true;
             micBtn.title = "Permiso de micrófono denegado o bloqueado por HTTP.";
+            wakeWordToggle.disabled = true;
+            wakeWordToggle.title = "Permiso de micrófono denegado o bloqueado por HTTP.";
           }
         };
 
@@ -1160,7 +1231,34 @@
           if (listening) {
             recognition.stop();
           } else {
+            recognition.continuous = wakeWordEnabled;
+            recognition.interimResults = false;
             recognition.start();
+          }
+        });
+
+        wakeWordToggle.addEventListener("click", () => {
+          markGesture();
+          wakeWordEnabled = !wakeWordEnabled;
+          updateWakeWordButton();
+          if (wakeWordEnabled) {
+            if (!listening && reactorOrb.getAttribute("data-state") !== "speaking") {
+              recognition.continuous = true;
+              recognition.interimResults = false;
+              try {
+                recognition.start();
+              } catch {
+                scheduleWakeRestart(300);
+              }
+            }
+          } else {
+            if (wakeRestartTimer) {
+              clearTimeout(wakeRestartTimer);
+              wakeRestartTimer = null;
+            }
+            if (listening) {
+              recognition.stop();
+            }
           }
         });
       }

@@ -243,3 +243,16 @@ def test_apps_endpoints() -> None:
             assert close_resp.json()["status"] == "closed"
             assert close_resp.json()["process"] == "notepad.exe"
             close_mock.assert_called_once_with("notepad")
+
+
+def test_index_contains_wake_word_hooks() -> None:
+    client = TestClient(app)
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert 'id="wakeWordToggle"' in resp.text
+    assert "Escucha continua: Jarvis" in resp.text
+    assert "WAKE_WORD_REGEX" in resp.text
+    assert "scheduleWakeRestart" in resp.text
+    assert "recognition.continuous = true" in resp.text
+    assert "recognition.interimResults = false" in resp.text
+

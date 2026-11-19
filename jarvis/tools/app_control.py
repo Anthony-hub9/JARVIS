@@ -44,6 +44,31 @@ MOBILE_APP_PACKAGES: dict[str, str] = {
     "chrome": "com.android.chrome",
     "youtube": "com.google.android.youtube",
     "whatsapp": "com.whatsapp",
+    "calculadora": "com.sec.android.app.popupcalculator",
+    "calculator": "com.sec.android.app.popupcalculator",
+    "calc": "com.sec.android.app.popupcalculator",
+    "camara": "com.sec.android.app.camera",
+    "cámara": "com.sec.android.app.camera",
+    "camera": "com.sec.android.app.camera",
+    "reloj": "com.sec.android.app.clockpackage",
+    "clock": "com.sec.android.app.clockpackage",
+    "ajustes": "com.android.settings",
+    "settings": "com.android.settings",
+    "maps": "com.google.android.apps.maps",
+    "gmail": "com.google.android.gm",
+    "instagram": "com.instagram.android",
+    "galeria": "com.sec.android.gallery3d",
+    "galería": "com.sec.android.gallery3d",
+    "gallery": "com.sec.android.gallery3d",
+    "notas": "com.samsung.android.app.notes",
+    "notes": "com.samsung.android.app.notes",
+    "telefono": "com.samsung.android.dialer",
+    "teléfono": "com.samsung.android.dialer",
+    "phone": "com.samsung.android.dialer",
+    "mensajes": "com.samsung.android.messaging",
+    "messages": "com.samsung.android.messaging",
+    "calendario": "com.samsung.android.calendar",
+    "calendar": "com.samsung.android.calendar",
 }
 
 _SAFE_APP_NAME_RE = re.compile(r"^[a-zA-Z0-9 ._\-+()]+$")
@@ -404,10 +429,15 @@ def build_mobile_intent(app_name: str) -> dict[str, Any]:
     key = app_name.strip().lower()
     if key not in MOBILE_APP_PACKAGES:
         raise ValueError(f"Mobile application '{app_name}' is not supported.")
+    package = MOBILE_APP_PACKAGES[key]
     return {
         "device": "s24_plus",
         "action": "android.intent.action.MAIN",
         "category": "android.intent.category.LAUNCHER",
-        "package": MOBILE_APP_PACKAGES[key],
+        "package": package,
         "app_name": key,
+        "intent_url": (
+            "intent:#Intent;action=android.intent.action.MAIN;"
+            f"category=android.intent.category.LAUNCHER;package={package};end"
+        ),
     }

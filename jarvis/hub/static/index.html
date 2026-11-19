@@ -426,6 +426,29 @@
       white-space: pre-wrap;
     }
 
+    .intent-launch-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 8px;
+      padding: 10px 16px;
+      border-radius: 12px;
+      background: linear-gradient(135deg, rgba(0, 212, 255, 0.22), rgba(0, 140, 255, 0.28));
+      border: 1px solid rgba(0, 212, 255, 0.55);
+      color: #e6fbff;
+      font-weight: 600;
+      font-size: 14px;
+      text-decoration: none;
+      box-shadow: 0 0 14px rgba(0, 212, 255, 0.18);
+      transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+
+    .intent-launch-btn:active,
+    .intent-launch-btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 0 20px rgba(0, 212, 255, 0.35);
+    }
+
     .quick-bar {
       display: flex;
       gap: 7px;
@@ -901,6 +924,21 @@
           toolBox.className = "tool-box";
           toolBox.textContent = JSON.stringify(data.tool_result, null, 2);
           wrap.appendChild(toolBox);
+
+          const intent = data.tool_result?.intent;
+          if (intent?.intent_url) {
+            const launchBtn = document.createElement("a");
+            launchBtn.className = "intent-launch-btn";
+            launchBtn.href = intent.intent_url;
+            const appLabel = intent.app_name || "aplicación";
+            launchBtn.textContent = `📲 Abrir ${appLabel} en S24+`;
+            wrap.appendChild(launchBtn);
+            try {
+              window.location.href = intent.intent_url;
+            } catch (_err) {
+              // Ignore navigation errors when blocked or outside Android Chrome.
+            }
+          }
         }
 
         const meta = document.createElement("div");

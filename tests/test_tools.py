@@ -93,7 +93,23 @@ def test_build_mobile_intent_for_s24_plus() -> None:
         "category": "android.intent.category.LAUNCHER",
         "package": "com.spotify.music",
         "app_name": "spotify",
+        "intent_url": (
+            "intent:#Intent;action=android.intent.action.MAIN;"
+            "category=android.intent.category.LAUNCHER;package=com.spotify.music;end"
+        ),
     }
+
+
+def test_build_mobile_intent_calculadora_s24_plus() -> None:
+    intent = build_mobile_intent("Calculadora")
+
+    assert intent["package"] == "com.sec.android.app.popupcalculator"
+    assert intent["app_name"] == "calculadora"
+    assert intent["intent_url"] == (
+        "intent:#Intent;action=android.intent.action.MAIN;"
+        "category=android.intent.category.LAUNCHER;"
+        "package=com.sec.android.app.popupcalculator;end"
+    )
 
 
 def test_build_mobile_intent_rejects_unknown_app() -> None:

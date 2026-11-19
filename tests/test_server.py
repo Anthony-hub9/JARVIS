@@ -256,3 +256,12 @@ def test_index_contains_wake_word_hooks() -> None:
     assert "recognition.continuous = true" in resp.text
     assert "recognition.interimResults = false" in resp.text
 
+
+def test_index_contains_mobile_intent_launch_button() -> None:
+    client = TestClient(app)
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert "intent-launch-btn" in resp.text
+    assert "intent_url" in resp.text
+
+

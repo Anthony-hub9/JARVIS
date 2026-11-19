@@ -246,7 +246,7 @@ async def test_fast_supervisor_approves_plain_chat_and_safe_tools_in_one_call() 
         assert len(backend.calls) == 1
 
         with patch("jarvis.tools.app_control.subprocess.Popen", return_value=MagicMock()):
-            launch_res = await orch.run("Abre notepad", device_id="pc")
+            launch_res = await orch.run("Por favor ejecuta notepad", device_id="pc")
         assert launch_res.approved is True
         assert launch_res.tool_result == {"tool": "app_launch", "app_name": "notepad", "device": "pc"}
         assert len(backend.calls) == 2
@@ -277,7 +277,7 @@ async def test_fast_supervisor_still_invokes_supervisor_for_app_close() -> None:
 
     fake_done = MagicMock(returncode=0, stdout="SUCCESS", stderr="")
     with patch("jarvis.tools.app_control.subprocess.run", return_value=fake_done):
-        res = await orch.run("Cierra notepad", device_id="pc")
+        res = await orch.run("Por favor cierra notepad", device_id="pc")
 
     assert res.approved is True
     assert res.tool_result is not None
@@ -414,3 +414,82 @@ async def test_orchestrator_executes_web_search_with_summary_and_fallback() -> N
         "query": "clima cdmx",
         "results": fake_results,
     }
+
+
+@pytest.mark.asyncio
+async def test_fast_command_router_launches_apps_without_llm_json() -> None:
+    memory = MemoryStore(":memory:")
+    backend = MockBackend([])
+    app_controller = MagicMock()
+    try:
+        orch = DualAgentOrchestrator(
+            backend=backend,
+            app_controller=app_controller,
+            memory_store=memory,
+            fast_supervisor=True,
+        )
+
+        calc_res = await orch.run("abre la calculadora", device_id="pc")
+        assert calc_res.approved is True
+        assert calc_res.attempts == 1
+        assert calc_res.tool_result == {"tool": "app_launch", "app_name": "calculadora", "device": "pc"}
+        app_controller.launch_app.assert_called_with("calculadora")
+
+        riot_res = await orch.run("Jarvis abre el cliente de riot", device_id="pc")
+        assert riot_res.approved is True
+        assert riot_res.attempts == 1
+        assert riot_res.tool_result == {"tool": "app_launch", "app_name": "cliente de riot", "device": "pc"}
+        app_controller.launch_app.assert_called_with("cliente de riot")
+
+        assert len(backend.calls) == 0
+        assert len(memory.recent_turns(limit=10)) == 4
+    finally:
+        memory.close()
+
+
+@pytest.mark.asyncio
+async def test_fast_command_router_app_close_still_validates_with_supervisor() -> None:
+    backend = MockBackend(["APPROVED"])
+    orch = DualAgentOrchestrator(
+        backend=backend,
+        executor_model="qwen2.5:1.5b",
+        supervisor_model="qwen2.5:1.5b",
+        fast_supervisor=True,
+    )
+
+    fake_done = MagicMock(returncode=0, stdout="SUCCESS", stderr="")
+    with patch("jarvis.tools.app_control.subprocess.run", return_value=fake_done) as run_mock:
+        res = await orch.run("cierra discord", device_id="pc")
+
+    run_mock.assert_called_once()
+    assert res.approved is True
+    assert res.attempts == 1
+    assert res.tool_result is not None
+    assert res.tool_result["tool"] == "app_close"
+    assert res.tool_result["app_name"] == "discord"
+    assert len(backend.calls) == 1
+    assert '"tool": "app_close"' in backend.calls[0][1]
+
+
+@pytest.mark.asyncio
+async def test_fast_command_router_agenda_list_without_llm() -> None:
+    store = AgendaStore(":memory:")
+    try:
+        store.add_event(title="Standup", when="2099-01-01T09:00:00")
+        backend = MockBackend([])
+        orch = DualAgentOrchestrator(
+            backend=backend,
+            agenda_store=store,
+            fast_supervisor=True,
+        )
+
+        res = await orch.run("ver mi agenda", device_id="pc")
+        assert res.approved is True
+        assert res.attempts == 1
+        assert res.tool_result is not None
+        assert res.tool_result["tool"] == "agenda_list"
+        assert len(res.tool_result["events"]) == 1
+        assert res.tool_result["events"][0]["title"] == "Standup"
+        assert len(backend.calls) == 0
+    finally:
+        store.close()

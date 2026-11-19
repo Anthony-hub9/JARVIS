@@ -22,6 +22,18 @@ SAFE_FAST_TOOLS = {
     "web_search",
 }
 _JSON_FENCE_RE = re.compile(r"^```(?:json)?\s*(.*?)\s*```$", re.DOTALL | re.IGNORECASE)
+_DIRECT_APP_LAUNCH_RE = re.compile(
+    r"^(?:jarvis[,\s]+)?(?:abre|abrir|inicia|iniciar|lanza|lanzar|open|launch)\s+(?:el|la|los|las|the)?\s*(.+?)[.!?\s]*$",
+    re.IGNORECASE,
+)
+_DIRECT_APP_CLOSE_RE = re.compile(
+    r"^(?:jarvis[,\s]+)?(?:cierra|cerrar|termina|terminar|mata|close|kill)\s+(?:el|la|los|las|the)?\s*(.+?)[.!?\s]*$",
+    re.IGNORECASE,
+)
+_DIRECT_AGENDA_LIST_RE = re.compile(
+    r"^(?:jarvis[,\s]+)?(?:ver|muestra|mostrar|lista|listar|dime)\s+(?:mi\s+)?(?:agenda|recordatorios)[.!?\s]*$",
+    re.IGNORECASE,
+)
 
 
 class AgentBackend(Protocol):
@@ -83,6 +95,30 @@ def _parse_tool_call(candidate: str) -> dict[str, Any] | None:
     return None
 
 
+def _route_direct_tool(user_input: str) -> dict[str, Any] | None:
+    """Deterministically route unambiguous local commands to tool JSON without LLM."""
+    text = user_input.strip()
+    if not text:
+        return None
+
+    if _DIRECT_AGENDA_LIST_RE.match(text):
+        return {"tool": "agenda_list"}
+
+    launch_match = _DIRECT_APP_LAUNCH_RE.match(text)
+    if launch_match:
+        app_name = launch_match.group(1).strip()
+        if app_name:
+            return {"tool": "app_launch", "app_name": app_name}
+
+    close_match = _DIRECT_APP_CLOSE_RE.match(text)
+    if close_match:
+        app_name = close_match.group(1).strip()
+        if app_name:
+            return {"tool": "app_close", "app_name": app_name}
+
+    return None
+
+
 class DualAgentOrchestrator:
     def __init__(
         self,
@@ -127,19 +163,27 @@ class DualAgentOrchestrator:
 
         for attempt in range(1, self.max_retries + 2):
             attempts = attempt
-            exec_prompt = self._build_executor_prompt(
-                effective_input,
-                device_id,
-                feedback,
-                has_images=bool(images),
-                recent_turns=recent_turns,
+            direct_tool = (
+                _route_direct_tool(effective_input)
+                if (not images and not feedback and self.fast_supervisor)
+                else None
             )
-            if images:
-                candidate = await self.backend.generate(self.vision_model, exec_prompt, images=images)
+            if direct_tool is not None:
+                tool_call = direct_tool
+                candidate = json.dumps(direct_tool, ensure_ascii=False)
             else:
-                candidate = await self.backend.generate(self.executor_model, exec_prompt)
-
-            tool_call = _parse_tool_call(candidate)
+                exec_prompt = self._build_executor_prompt(
+                    effective_input,
+                    device_id,
+                    feedback,
+                    has_images=bool(images),
+                    recent_turns=recent_turns,
+                )
+                if images:
+                    candidate = await self.backend.generate(self.vision_model, exec_prompt, images=images)
+                else:
+                    candidate = await self.backend.generate(self.executor_model, exec_prompt)
+                tool_call = _parse_tool_call(candidate)
             fast_approved = self.fast_supervisor and (
                 tool_call is None or tool_call["tool"].strip().lower() in SAFE_FAST_TOOLS
             )

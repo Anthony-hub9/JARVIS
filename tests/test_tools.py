@@ -178,3 +178,75 @@ def test_close_app_uwp_fallback_to_running_root_process() -> None:
     assert run_mock.call_args_list[0].args[0] == ["taskkill", "/IM", "whatsapp.exe", "/F"]
     assert run_mock.call_args_list[1].args[0] == ["tasklist", "/FO", "CSV", "/NH"]
     assert run_mock.call_args_list[2].args[0] == ["taskkill", "/IM", "whatsapp.root.exe", "/F"]
+
+
+def test_fuzzy_resolve_riot_to_riot_client() -> None:
+    controller = AppController(allowlist={}, discover=False)
+    controller._discovered = {
+        "riot client": ["cmd", "/c", "start", "", r"C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Riot Client.lnk"],
+        "riot client helper": [r"C:\Riot Games\Riot Client\RiotClientHelper.exe"],
+    }
+
+    fake_proc = MagicMock()
+    with patch("jarvis.tools.app_control.shutil.which", return_value=None):
+        with patch("jarvis.tools.app_control.subprocess.Popen", return_value=fake_proc) as popen_mock:
+            proc = controller.launch_app("riot")
+
+    assert proc is fake_proc
+    popen_mock.assert_called_once_with(controller._discovered["riot client"])
+
+
+def test_fuzzy_resolve_filler_words_el_cliente_de_riot() -> None:
+    controller = AppController(allowlist={}, discover=False)
+    controller._discovered = {
+        "cliente de riot": [r"C:\Riot Games\Riot Client\RiotClientServices.exe"],
+    }
+
+    fake_proc = MagicMock()
+    with patch("jarvis.tools.app_control.shutil.which", return_value=None):
+        with patch("jarvis.tools.app_control.subprocess.Popen", return_value=fake_proc) as popen_mock:
+            proc = controller.launch_app("el cliente de riot")
+
+    assert proc is fake_proc
+    popen_mock.assert_called_once_with(controller._discovered["cliente de riot"])
+
+
+def test_fuzzy_resolve_unknown_app_raises_value_error() -> None:
+    controller = AppController(allowlist={"notepad": ["notepad.exe"]}, discover=False)
+    controller._discovered = {
+        "riot client": [r"C:\Riot Games\Riot Client\RiotClientServices.exe"],
+    }
+
+    with patch("jarvis.tools.app_control.shutil.which", return_value=None):
+        with patch("jarvis.tools.app_control.subprocess.Popen") as popen_mock:
+            with pytest.raises(ValueError, match="not found"):
+                controller.launch_app("totally unknown application")
+
+    popen_mock.assert_not_called()
+
+
+def test_close_app_fuzzy_match_lnk_and_tasklist_fallback() -> None:
+    controller = AppController(allowlist={}, discover=False)
+    controller._discovered = {
+        "riot client": ["cmd", "/c", "start", "", r"C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Riot Client.lnk"],
+    }
+
+    not_found = SimpleNamespace(returncode=128, stdout="", stderr='ERROR: The process "riot client.exe" not found.')
+    tasklist_ok = SimpleNamespace(
+        returncode=0,
+        stdout='"RiotClientServices.exe","4321","Console","1","90,000 K"\n',
+        stderr="",
+    )
+    killed_ok = SimpleNamespace(returncode=0, stdout="SUCCESS", stderr="")
+
+    with patch(
+        "jarvis.tools.app_control.subprocess.run",
+        side_effect=[not_found, tasklist_ok, killed_ok],
+    ) as run_mock:
+        res = controller.close_app("riot")
+
+    assert res["process"] == "riotclientservices.exe"
+    assert res["returncode"] == 0
+    assert run_mock.call_args_list[0].args[0] == ["taskkill", "/IM", "riot client.exe", "/F"]
+    assert run_mock.call_args_list[1].args[0] == ["tasklist", "/FO", "CSV", "/NH"]
+    assert run_mock.call_args_list[2].args[0] == ["taskkill", "/IM", "riotclientservices.exe", "/F"]

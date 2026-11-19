@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import difflib
 import io
 import json
 import os
@@ -47,10 +48,22 @@ MOBILE_APP_PACKAGES: dict[str, str] = {
 
 _SAFE_APP_NAME_RE = re.compile(r"^[a-zA-Z0-9 ._\-+()]+$")
 
+_FILLER_WORDS: frozenset[str] = frozenset(
+    {"el", "la", "los", "las", "de", "del", "the", "of", "app", "aplicacion", "aplicación"}
+)
+
 
 def _normalize_key(name: str) -> str:
     cleaned = name.strip().lower()
     return cleaned[:-4] if cleaned.endswith(".exe") else cleaned
+
+
+def _tokenize(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9]+", text.lower())
+
+
+def _clean_tokens(text: str) -> list[str]:
+    return [tok for tok in _tokenize(text) if tok not in _FILLER_WORDS]
 
 
 def _scan_start_menu_shortcuts(dirs: list[Path]) -> dict[str, list[str]]:
@@ -224,6 +237,41 @@ class AppController:
         """Return sorted list of known application names."""
         return sorted(set(self.allowlist) | set(self._discovered))
 
+    def _fuzzy_match_entry(self, key: str) -> tuple[str, list[str]] | None:
+        combined = {**self._discovered, **self.allowlist}
+        if not combined:
+            return None
+
+        cleaned_tokens = _clean_tokens(key)
+        if not cleaned_tokens:
+            return None
+        cleaned_key = " ".join(cleaned_tokens)
+
+        substring_hits = [k for k in combined if cleaned_key in k]
+        if substring_hits:
+            best = min(substring_hits, key=len)
+            return best, combined[best]
+
+        query_token_set = set(cleaned_tokens)
+        token_hits = [k for k in combined if query_token_set.issubset(set(_tokenize(k)))]
+        if token_hits:
+            best = min(token_hits, key=len)
+            return best, combined[best]
+
+        close = difflib.get_close_matches(cleaned_key, combined.keys(), n=1, cutoff=0.75)
+        if close:
+            best = close[0]
+            return best, combined[best]
+
+        return None
+
+    def _resolve_entry(self, key: str) -> tuple[str, list[str]] | None:
+        if key in self.allowlist:
+            return key, self.allowlist[key]
+        if key in self._discovered:
+            return key, self._discovered[key]
+        return self._fuzzy_match_entry(key)
+
     def _resolve_command(self, app_name: str) -> list[str] | None:
         raw = app_name.strip()
         if not raw or not _SAFE_APP_NAME_RE.match(raw):
@@ -238,6 +286,10 @@ class AppController:
         which_hit = shutil.which(raw) or shutil.which(f"{key}.exe")
         if which_hit:
             return [which_hit]
+
+        fuzzy = self._fuzzy_match_entry(key)
+        if fuzzy is not None:
+            return fuzzy[1]
         return None
 
     def launch_app(self, app_name: str) -> subprocess.Popen[bytes]:
@@ -253,16 +305,22 @@ class AppController:
             raise ValueError(f"Invalid application name '{app_name}'.")
 
         key = _normalize_key(raw)
-        cmd = self.allowlist.get(key) or self._discovered.get(key)
-        if cmd:
+        if key in PROTECTED_SYSTEM_PROCESSES or f"{key}.exe" in PROTECTED_SYSTEM_PROCESSES:
+            raise ValueError(f"Refusing to close protected system process '{key}.exe'.")
+
+        entry = self._resolve_entry(key)
+        if entry is not None:
+            matched_key, cmd = entry
             if len(cmd) >= 2 and cmd[1].startswith("shell:AppsFolder\\"):
-                proc_name = f"{key}.exe"
+                proc_name = f"{matched_key}.exe"
             else:
                 candidate = Path(cmd[-1]).name
                 if candidate.lower().endswith(".exe"):
                     proc_name = candidate.lower()
+                elif candidate.lower().endswith(".lnk"):
+                    proc_name = f"{Path(cmd[-1]).stem.lower()}.exe"
                 else:
-                    proc_name = f"{key}.exe"
+                    proc_name = f"{matched_key}.exe"
         else:
             proc_name = raw.lower() if raw.lower().endswith(".exe") else f"{key}.exe"
 
@@ -302,7 +360,12 @@ class AppController:
                 continue
             norm_img = _normalize_key(image)
             compact_img = re.sub(r"[^a-z0-9]", "", norm_img)
-            if norm_img == key or norm_img.startswith(f"{key}.") or compact_img.startswith(compact_key):
+            if (
+                norm_img == key
+                or norm_img.startswith(f"{key}.")
+                or compact_img.startswith(compact_key)
+                or (len(compact_key) >= 4 and compact_key in compact_img)
+            ):
                 return image
         return None
 
@@ -317,17 +380,17 @@ class AppController:
         )
         if result.returncode != 0:
             key = _normalize_key(app_name)
-            cmd = self.allowlist.get(key) or self._discovered.get(key)
-            if cmd and len(cmd) >= 2 and cmd[1].startswith("shell:AppsFolder\\"):
-                alt_proc = self._find_running_uwp_process(key, proc_name)
-                if alt_proc:
-                    proc_name = alt_proc
-                    result = subprocess.run(
-                        ["taskkill", "/IM", proc_name, "/F"],
-                        capture_output=True,
-                        text=True,
-                        check=False,
-                    )
+            entry = self._resolve_entry(key)
+            search_key = entry[0] if entry is not None else (" ".join(_clean_tokens(key)) or key)
+            alt_proc = self._find_running_uwp_process(search_key, proc_name)
+            if alt_proc:
+                proc_name = alt_proc
+                result = subprocess.run(
+                    ["taskkill", "/IM", proc_name, "/F"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
         return {
             "process": proc_name,
             "returncode": result.returncode,

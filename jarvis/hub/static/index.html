@@ -662,6 +662,10 @@
           <option value="laptop">Laptop</option>
           <option value="s24-plus">Galaxy S24+</option>
         </select>
+        <select id="voiceProfileSelect" aria-label="Perfil de voz" title="Perfil de voz neural">
+          <option value="jarvis">Voz: JARVIS</option>
+          <option value="albedo">Voz: Albedo</option>
+        </select>
         <button id="wakeWordToggle" class="hud-btn" type="button" aria-pressed="false" aria-label="Escucha continua: Jarvis" title="Escucha continua: Jarvis">🎙️ Jarvis: OFF</button>
         <button id="ttsToggle" class="hud-btn active" type="button" title="Activar o silenciar voz de JARVIS">🔊 Voz</button>
       </div>
@@ -778,12 +782,15 @@
       const appsList = document.getElementById("appsList");
       const appsFeedback = document.getElementById("appsFeedback");
       const appsRefreshBtn = document.getElementById("appsRefreshBtn");
+      const voiceProfileSelect = document.getElementById("voiceProfileSelect");
 
       let ws = null;
       let reconnectTimer = null;
       let pendingEl = null;
       let userHasInteracted = false;
       let ttsEnabled = localStorage.getItem("jarvis_tts") !== "0";
+      let voiceProfile = localStorage.getItem("jarvis_voice_profile") === "albedo" ? "albedo" : "jarvis";
+      voiceProfileSelect.value = voiceProfile;
       let activeAudio = null;
       let activeAudioUrl = null;
       let upcomingOnly = false;
@@ -1130,7 +1137,7 @@
           const resp = await fetch("/api/tts", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ text: trimmed }),
+            body: JSON.stringify({ text: trimmed, voice: voiceProfile }),
           });
           if (!resp.ok) {
             throw new Error(`HTTP ${resp.status}`);
@@ -1152,6 +1159,11 @@
           speakWithBrowserFallback(trimmed);
         }
       }
+
+      voiceProfileSelect.addEventListener("change", () => {
+        voiceProfile = voiceProfileSelect.value === "albedo" ? "albedo" : "jarvis";
+        localStorage.setItem("jarvis_voice_profile", voiceProfile);
+      });
 
       ttsToggle.addEventListener("click", () => {
         markGesture();

@@ -158,26 +158,40 @@ def test_index_contains_hud_and_api_hooks() -> None:
     assert "/api/tts" in resp.text
     assert "/api/agenda" in resp.text
     assert "/api/apps" in resp.text
+    assert 'id="voiceProfileSelect"' in resp.text
+    assert "jarvis_voice_profile" in resp.text
 
 
 def test_tts_endpoint_success_and_errors() -> None:
     mock_engine = MagicMock()
-    mock_engine.synthesize_wav = AsyncMock(return_value=b"RIFF\x00\x00\x00\x00WAVE")
+    mock_engine.synthesize_audio = AsyncMock(
+        return_value=(b"ID3\x03\x00\x00\x00", "audio/mpeg")
+    )
 
     with patch("jarvis.hub.server.get_tts_engine", return_value=mock_engine):
         client = TestClient(app)
         resp = client.post("/api/tts", json={"text": "Hola señor"})
         assert resp.status_code == 200
-        assert resp.headers["content-type"] == "audio/wav"
-        assert resp.content.startswith(b"RIFF")
+        assert resp.headers["content-type"] == "audio/mpeg"
+        assert resp.content.startswith(b"ID3")
+        mock_engine.synthesize_audio.assert_awaited_with("Hola señor", profile="jarvis")
 
-    mock_engine.synthesize_wav = AsyncMock(side_effect=ValueError("Texto vacío"))
+        resp_albedo = client.post(
+            "/api/tts", json={"text": "A sus órdenes", "voice": "albedo"}
+        )
+        assert resp_albedo.status_code == 200
+        assert resp_albedo.headers["content-type"] == "audio/mpeg"
+        mock_engine.synthesize_audio.assert_awaited_with(
+            "A sus órdenes", profile="albedo"
+        )
+
+    mock_engine.synthesize_audio = AsyncMock(side_effect=ValueError("Texto vacío"))
     with patch("jarvis.hub.server.get_tts_engine", return_value=mock_engine):
         client = TestClient(app)
         resp = client.post("/api/tts", json={"text": ""})
         assert resp.status_code == 400
 
-    mock_engine.synthesize_wav = AsyncMock(side_effect=TTSError("Sin voz"))
+    mock_engine.synthesize_audio = AsyncMock(side_effect=TTSError("Sin voz"))
     with patch("jarvis.hub.server.get_tts_engine", return_value=mock_engine):
         client = TestClient(app)
         resp = client.post("/api/tts", json={"text": "Hola"})

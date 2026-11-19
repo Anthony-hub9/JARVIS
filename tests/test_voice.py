@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from jarvis.voice.tts import LocalTTSEngine, TTSError
+from jarvis.voice.tts import VOICE_PROFILES, LocalTTSEngine, TTSError
 
 
 @pytest.mark.asyncio
@@ -100,3 +100,76 @@ async def test_synthesize_wav_timeout_kills_process() -> None:
             await engine.synthesize_wav("Hola")
 
     proc.kill.assert_called_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("profile", "expected_voice", "expected_rate", "expected_pitch"),
+    [
+        ("jarvis", "es-MX-JorgeNeural", "-4%", "-6Hz"),
+        ("albedo", "es-MX-DaliaNeural", "-5%", "+2Hz"),
+    ],
+)
+async def test_synthesize_audio_neural_profiles(
+    profile: str,
+    expected_voice: str,
+    expected_rate: str,
+    expected_pitch: str,
+) -> None:
+    engine = LocalTTSEngine(powershell_exe="powershell.exe")
+    captured: dict[str, object] = {}
+
+    class FakeCommunicate:
+        def __init__(self, text: str, voice: str, *, rate: str, pitch: str) -> None:
+            captured["text"] = text
+            captured["voice"] = voice
+            captured["rate"] = rate
+            captured["pitch"] = pitch
+
+        async def stream(self):
+            yield {"type": "WordBoundary", "data": None}
+            yield {"type": "audio", "data": b"ID3"}
+            yield {"type": "audio", "data": b"\x00\x01MP3"}
+
+    assert profile in VOICE_PROFILES
+    with patch("jarvis.voice.tts.edge_tts.Communicate", FakeCommunicate):
+        audio_bytes, media_type = await engine.synthesize_audio(
+            "  Buenos días señor  ", profile=profile
+        )
+
+    assert audio_bytes == b"ID3\x00\x01MP3"
+    assert media_type == "audio/mpeg"
+    assert captured == {
+        "text": "Buenos días señor",
+        "voice": expected_voice,
+        "rate": expected_rate,
+        "pitch": expected_pitch,
+    }
+
+
+@pytest.mark.asyncio
+async def test_synthesize_audio_falls_back_to_sapi5_on_edge_tts_error() -> None:
+    engine = LocalTTSEngine(powershell_exe="powershell.exe")
+    fake_wav = b"RIFF\x24\x00\x00\x00WAVEfmt "
+
+    class FailingCommunicate:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def stream(self):
+            raise RuntimeError("offline")
+            yield  # pragma: no cover
+
+    with (
+        patch("jarvis.voice.tts.edge_tts.Communicate", FailingCommunicate),
+        patch.object(
+            engine, "synthesize_wav", new=AsyncMock(return_value=fake_wav)
+        ) as wav_mock,
+    ):
+        audio_bytes, media_type = await engine.synthesize_audio(
+            "Modo sin conexión", profile="albedo"
+        )
+
+    assert audio_bytes == fake_wav
+    assert media_type == "audio/wav"
+    wav_mock.assert_awaited_once_with("Modo sin conexión")

@@ -25,6 +25,7 @@ _tts_engine: LocalTTSEngine | None = None
 
 class TTSRequest(BaseModel):
     text: str
+    voice: str = "jarvis"
 
 
 class AgendaCreateRequest(BaseModel):
@@ -119,12 +120,14 @@ async def health() -> dict[str, str]:
 async def synthesize_tts(payload: TTSRequest) -> Response:
     engine = get_tts_engine()
     try:
-        wav_bytes = await engine.synthesize_wav(payload.text)
+        audio_bytes, media_type = await engine.synthesize_audio(
+            payload.text, profile=payload.voice
+        )
     except ValueError as exc:
         return JSONResponse(status_code=400, content={"detail": str(exc)})
     except (TTSError, Exception) as exc:
         return JSONResponse(status_code=503, content={"detail": str(exc)})
-    return Response(content=wav_bytes, media_type="audio/wav")
+    return Response(content=audio_bytes, media_type=media_type)
 
 
 @app.get("/api/agenda")

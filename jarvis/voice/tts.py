@@ -1,4 +1,4 @@
-"""100% free local Spanish Text-to-Speech synthesis using Windows System.Speech."""
+"""100% free Spanish Text-to-Speech synthesis using Edge Neural TTS with Windows SAPI5 fallback."""
 
 from __future__ import annotations
 
@@ -8,6 +8,25 @@ import shutil
 import sys
 import tempfile
 from pathlib import Path
+
+try:
+    import edge_tts
+except ImportError:  # pragma: no cover - optional runtime fallback
+    edge_tts = None  # type: ignore[assignment]
+
+
+VOICE_PROFILES: dict[str, dict[str, str]] = {
+    "jarvis": {
+        "voice": "es-MX-JorgeNeural",
+        "rate": "-4%",
+        "pitch": "-6Hz",
+    },
+    "albedo": {
+        "voice": "es-MX-DaliaNeural",
+        "rate": "-5%",
+        "pitch": "+2Hz",
+    },
+}
 
 
 class TTSError(RuntimeError):
@@ -107,3 +126,32 @@ class LocalTTSEngine:
             return wav_bytes
         finally:
             tmp_path.unlink(missing_ok=True)
+
+    async def synthesize_audio(
+        self, text: str, profile: str = "jarvis"
+    ) -> tuple[bytes, str]:
+        """Synthesize *text* using Edge Neural TTS, falling back to local SAPI5 WAV."""
+        cleaned = self.validate_text(text)
+        profile_key = (profile or "jarvis").strip().lower()
+        selected = VOICE_PROFILES.get(profile_key, VOICE_PROFILES["jarvis"])
+
+        if edge_tts is not None:
+            try:
+                communicate = edge_tts.Communicate(
+                    cleaned,
+                    voice=selected["voice"],
+                    rate=selected["rate"],
+                    pitch=selected["pitch"],
+                )
+                chunks: list[bytes] = []
+                async for chunk in communicate.stream():
+                    if chunk.get("type") == "audio" and chunk.get("data"):
+                        chunks.append(chunk["data"])
+                mp3_bytes = b"".join(chunks)
+                if mp3_bytes:
+                    return mp3_bytes, "audio/mpeg"
+            except Exception:
+                pass
+
+        wav_bytes = await self.synthesize_wav(cleaned)
+        return wav_bytes, "audio/wav"

@@ -6,6 +6,8 @@ import jarvis.agents.orchestrator as orchestrator_mod
 from jarvis.agents.orchestrator import DualAgentOrchestrator, OllamaBackend
 from jarvis.config import Settings
 from jarvis.tools.agenda import AgendaStore
+from jarvis.tools.memory import MemoryStore
+from jarvis.tools.web_search import WebSearchTool
 
 
 class MockBackend:
@@ -281,3 +283,134 @@ async def test_fast_supervisor_still_invokes_supervisor_for_app_close() -> None:
     assert res.tool_result is not None
     assert res.tool_result["tool"] == "app_close"
     assert len(backend.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_shared_memory_injection_and_turn_recording() -> None:
+    memory = MemoryStore(":memory:")
+    try:
+        backend = MockBackend(
+            [
+                "Entendido, recordaré tu laptop.",
+                "Listo desde tu S24+.",
+                "Bloqueado",
+                "REJECTED: No autorizado",
+            ]
+        )
+        orch = DualAgentOrchestrator(
+            backend=backend,
+            memory_store=memory,
+            max_retries=0,
+            fast_supervisor=True,
+        )
+
+        res1 = await orch.run("Estoy en mi laptop", device_id="laptop")
+        assert res1.approved is True
+
+        res2 = await orch.run("¿Qué dije antes?", device_id="s24_plus")
+        assert res2.approved is True
+        # Second prompt must include the shared turns from laptop
+        second_prompt = backend.calls[1][1]
+        assert "[laptop] user: Estoy en mi laptop" in second_prompt
+        assert "[laptop] assistant: Entendido, recordaré tu laptop." in second_prompt
+
+        # Rejected/circuit-broken run must NOT be recorded in memory
+        orch.fast_supervisor = False
+        res3 = await orch.run("Comando peligroso", device_id="s24_plus")
+        assert res3.approved is False
+        assert len(memory.recent_turns(limit=10)) == 4
+    finally:
+        memory.close()
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_executes_memory_save_and_search_tools() -> None:
+    memory = MemoryStore(":memory:")
+    try:
+        backend = MockBackend(
+            [
+                '{"tool": "memory_save", "key": "cafe_favorito", "value": "Americano sin azúcar"}',
+                '{"tool": "memory_search", "query": "cafe"}',
+            ]
+        )
+        orch = DualAgentOrchestrator(
+            backend=backend,
+            memory_store=memory,
+            fast_supervisor=True,
+        )
+
+        save_res = await orch.run("Recuerda que mi café favorito es americano sin azúcar", device_id="laptop")
+        assert save_res.approved is True
+        assert save_res.tool_result is not None
+        assert save_res.tool_result["tool"] == "memory_save"
+        assert save_res.tool_result["fact"]["key"] == "cafe_favorito"
+
+        search_res = await orch.run("¿Cómo tomo el café?", device_id="s24_plus")
+        assert search_res.approved is True
+        assert search_res.tool_result is not None
+        assert search_res.tool_result["tool"] == "memory_search"
+        assert len(search_res.tool_result["facts"]) == 1
+        assert search_res.tool_result["facts"][0]["value"] == "Americano sin azúcar"
+        assert len(backend.calls) == 2
+    finally:
+        memory.close()
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_executes_web_search_with_summary_and_fallback() -> None:
+    fake_results = [
+        {
+            "title": "Clima CDMX",
+            "snippet": "22°C mayormente soleado.",
+            "url": "https://example.com/clima",
+        }
+    ]
+    web_tool = MagicMock(spec=WebSearchTool)
+    web_tool.search.return_value = fake_results
+
+    backend = MockBackend(
+        [
+            '{"tool": "web_search", "query": "clima cdmx"}',
+            "En Ciudad de México hay 22 grados y cielo soleado.",
+        ]
+    )
+    orch = DualAgentOrchestrator(
+        backend=backend,
+        web_search=web_tool,
+        fast_supervisor=True,
+    )
+
+    res = await orch.run("¿Cómo está el clima en CDMX?", device_id="s24_plus")
+    assert res.approved is True
+    assert res.response == "En Ciudad de México hay 22 grados y cielo soleado."
+    assert res.tool_result == {
+        "tool": "web_search",
+        "query": "clima cdmx",
+        "results": fake_results,
+    }
+    web_tool.search.assert_called_once_with("clima cdmx", max_results=3)
+
+    # Fallback when backend.generate fails during summarization
+    class FailingSummaryBackend:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def generate(self, model: str, prompt: str) -> str:
+            self.calls += 1
+            if self.calls == 1:
+                return '{"tool": "web_search", "query": "clima cdmx"}'
+            raise RuntimeError("Ollama timeout")
+
+    orch_fallback = DualAgentOrchestrator(
+        backend=FailingSummaryBackend(),
+        web_search=web_tool,
+        fast_supervisor=True,
+    )
+    fb_res = await orch_fallback.run("Clima CDMX", device_id="laptop")
+    assert fb_res.approved is True
+    assert "Clima CDMX: 22°C mayormente soleado." in fb_res.response
+    assert fb_res.tool_result == {
+        "tool": "web_search",
+        "query": "clima cdmx",
+        "results": fake_results,
+    }

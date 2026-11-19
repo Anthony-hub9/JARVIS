@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     fast_supervisor: bool = True
 
     agenda_db_path: str = "jarvis_agenda.db"
+    memory_db_path: str = "jarvis_memory.db"
     google_calendar_credentials_path: str = "credentials.json"
     google_calendar_token_path: str = "token.json"
 

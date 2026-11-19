@@ -12,5 +12,8 @@ class Settings(BaseSettings):
     hub_host: str = "0.0.0.0"
     hub_port: int = 8000
 
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_model: str = "qwen2.5:7b"
+
 
 settings = Settings()

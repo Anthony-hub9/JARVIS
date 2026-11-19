@@ -22,6 +22,24 @@ class GeminiBackend:
         return response.text or ""
 
 
+class OllamaBackend:
+    def __init__(self, base_url: str = settings.ollama_base_url, timeout: float = 60.0) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.timeout = timeout
+
+    async def generate(self, model: str, prompt: str) -> str:
+        import httpx
+
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            resp = await client.post(
+                f"{self.base_url}/api/generate",
+                json={"model": model, "prompt": prompt, "stream": False},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return data.get("response", "")
+
+
 @dataclass
 class OrchestratorResult:
     response: str

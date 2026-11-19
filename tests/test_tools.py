@@ -323,3 +323,35 @@ def test_close_app_tasklist_v_window_title_match() -> None:
         check=False,
     )
     assert proc == "calculatorapp.exe"
+
+
+def test_resolve_command_prefers_discovered_over_bare_default_allowlist() -> None:
+    controller = AppController(discover=False)
+    steam_lnk = ["cmd", "/c", "start", "", r"C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Steam\Steam.lnk"]
+    chrome_exe = [r"C:\Program Files\Google\Chrome\Application\chrome.exe"]
+    controller._discovered = {
+        "steam": steam_lnk,
+        "chrome": chrome_exe,
+    }
+
+    fake_proc = MagicMock()
+    with patch("jarvis.tools.app_control.shutil.which", return_value=None):
+        assert controller._resolve_command("steam") == steam_lnk
+        assert controller._resolve_command("chrome") == chrome_exe
+        with patch("jarvis.tools.app_control.subprocess.Popen", return_value=fake_proc) as popen_mock:
+            proc = controller.launch_app("steam")
+
+    assert proc is fake_proc
+    popen_mock.assert_called_once_with(steam_lnk)
+
+
+def test_resolve_command_respects_custom_allowlist_and_path_entries() -> None:
+    custom = AppController(allowlist={"steam": ["custom_steam.exe"]}, discover=False)
+    custom._discovered = {"steam": [r"C:\Program Files (x86)\Steam\steam.exe"]}
+    with patch("jarvis.tools.app_control.shutil.which", return_value=None):
+        assert custom._resolve_command("steam") == ["custom_steam.exe"]
+
+    default_ctrl = AppController(discover=False)
+    default_ctrl._discovered = {"notepad": [r"C:\Custom\notepad.exe"]}
+    with patch("jarvis.tools.app_control.shutil.which", return_value=r"C:\Windows\System32\notepad.exe"):
+        assert default_ctrl._resolve_command("notepad") == ["notepad.exe"]

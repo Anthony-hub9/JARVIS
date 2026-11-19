@@ -305,7 +305,7 @@ class DualAgentOrchestrator:
                     f"Aplicación '{app_name.lower()}' iniciada en {device_id}.",
                     {"tool": tool_name, "app_name": app_name.lower(), "device": device_id},
                 )
-            except ValueError as exc:
+            except (ValueError, OSError) as exc:
                 return (
                     f"No se pudo abrir '{app_name}': {exc}",
                     {"tool": tool_name, "error": str(exc)},

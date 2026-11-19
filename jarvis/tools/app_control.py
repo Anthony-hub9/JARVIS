@@ -276,6 +276,7 @@ class AppController:
         allowlist: dict[str, list[str]] | None = None,
         discover: bool = True,
     ) -> None:
+        self._is_custom_allowlist: bool = allowlist is not None
         self.allowlist: dict[str, list[str]] = (
             dict(allowlist) if allowlist is not None else dict(WINDOWS_APP_ALLOWLIST)
         )
@@ -290,8 +291,24 @@ class AppController:
         """Return sorted list of known application names."""
         return sorted(set(self.allowlist) | set(self._discovered))
 
+    def _prefer_allowlist(self, key: str, cmd: list[str]) -> list[str]:
+        """Use allowlist command only if custom, absolute, or on PATH; else prefer discovered."""
+        if (
+            self._is_custom_allowlist
+            or not cmd
+            or Path(cmd[0]).is_absolute()
+            or shutil.which(cmd[0])
+        ):
+            return cmd
+        if key in self._discovered:
+            return self._discovered[key]
+        return cmd
+
     def _fuzzy_match_entry(self, key: str) -> tuple[str, list[str]] | None:
-        combined = {**self._discovered, **self.allowlist}
+        resolved_allowlist = {
+            k: self._prefer_allowlist(k, v) for k, v in self.allowlist.items()
+        }
+        combined = {**self._discovered, **resolved_allowlist}
         if not combined:
             return None
 
@@ -320,7 +337,7 @@ class AppController:
 
     def _resolve_entry(self, key: str) -> tuple[str, list[str]] | None:
         if key in self.allowlist:
-            return key, self.allowlist[key]
+            return key, self._prefer_allowlist(key, self.allowlist[key])
         if key in self._discovered:
             return key, self._discovered[key]
         return self._fuzzy_match_entry(key)
@@ -332,7 +349,7 @@ class AppController:
 
         key = _normalize_key(raw)
         if key in self.allowlist:
-            return self.allowlist[key]
+            return self._prefer_allowlist(key, self.allowlist[key])
         if key in self._discovered:
             return self._discovered[key]
 

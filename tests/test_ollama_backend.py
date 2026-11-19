@@ -21,9 +21,10 @@ async def test_ollama_backend_generate():
         result = await backend.generate("qwen2.5:7b", "Hola")
 
     assert result == "Hola desde Ollama"
+    assert backend.timeout == 180.0
     mock_client.post.assert_awaited_once_with(
         "http://localhost:11434/api/generate",
-        json={"model": "qwen2.5:7b", "prompt": "Hola", "stream": False},
+        json={"model": "qwen2.5:7b", "prompt": "Hola", "stream": False, "keep_alive": "15m"},
     )
 
 
@@ -49,6 +50,7 @@ async def test_ollama_backend_generate_with_images():
             "model": "moondream",
             "prompt": "Analiza el frame",
             "stream": False,
+            "keep_alive": "15m",
             "images": ["ZmFrZQ=="],
         },
     )

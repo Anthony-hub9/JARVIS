@@ -99,10 +99,22 @@ async def websocket_endpoint(websocket: WebSocket, device_id: str) -> None:
         while True:
             raw_text = await websocket.receive_text()
             user_text, images = _parse_ws_message(raw_text)
-            if images:
-                result = await orchestrator.run(user_text, device_id=device_id, images=images)
-            else:
-                result = await orchestrator.run(user_text, device_id=device_id)
+            try:
+                if images:
+                    result = await orchestrator.run(user_text, device_id=device_id, images=images)
+                else:
+                    result = await orchestrator.run(user_text, device_id=device_id)
+            except Exception as exc:
+                await websocket.send_json(
+                    {
+                        "device_id": device_id,
+                        "response": f"Error al procesar con Ollama: {type(exc).__name__}: {exc}",
+                        "approved": False,
+                        "attempts": 0,
+                        "circuit_broken": False,
+                    }
+                )
+                continue
             await websocket.send_json(
                 {
                     "device_id": device_id,

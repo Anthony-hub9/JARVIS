@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi.testclient import TestClient
 
-from jarvis.agents.orchestrator import DualAgentOrchestrator
+from jarvis.agents.orchestrator import DualAgentOrchestrator, OrchestratorResult
 from jarvis.hub.server import app
 from jarvis.tools.agenda import AgendaStore
 from jarvis.tools.app_control import AppController
@@ -117,3 +117,32 @@ def test_websocket_chat_agenda_and_game_frame() -> None:
                 assert fake_backend.calls[8][2] is None
     finally:
         store.close()
+
+
+def test_websocket_handles_orchestrator_exception_without_dropping() -> None:
+    mock_orchestrator = MagicMock()
+    mock_orchestrator.run = AsyncMock(
+        side_effect=[
+            RuntimeError("timed out"),
+            OrchestratorResult(response="Recuperado", approved=True, attempts=1),
+        ]
+    )
+
+    with patch("jarvis.hub.server.get_orchestrator", return_value=mock_orchestrator):
+        client = TestClient(app)
+        with client.websocket_connect("/ws/pc") as ws:
+            ws.send_text("Hola")
+            err_resp = ws.receive_json()
+            assert err_resp == {
+                "device_id": "pc",
+                "response": "Error al procesar con Ollama: RuntimeError: timed out",
+                "approved": False,
+                "attempts": 0,
+                "circuit_broken": False,
+            }
+
+            # Connection remains open for subsequent messages
+            ws.send_text("Sigues ahí?")
+            ok_resp = ws.receive_json()
+            assert ok_resp["approved"] is True
+            assert ok_resp["response"] == "Recuperado"

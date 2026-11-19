@@ -18,18 +18,24 @@ class AgentBackend(Protocol):
 
 
 class OllamaBackend:
-    def __init__(self, base_url: str = settings.ollama_base_url, timeout: float = 60.0) -> None:
+    def __init__(self, base_url: str = settings.ollama_base_url, timeout: float = 180.0) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
 
     async def generate(self, model: str, prompt: str, images: list[str] | None = None) -> str:
         import httpx
 
-        payload: dict[str, Any] = {"model": model, "prompt": prompt, "stream": False}
+        payload: dict[str, Any] = {
+            "model": model,
+            "prompt": prompt,
+            "stream": False,
+            "keep_alive": "15m",
+        }
         if images:
             payload["images"] = images
 
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        timeout_cfg = httpx.Timeout(self.timeout, connect=10.0)
+        async with httpx.AsyncClient(timeout=timeout_cfg) as client:
             resp = await client.post(
                 f"{self.base_url}/api/generate",
                 json=payload,

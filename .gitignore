@@ -21,3 +21,6 @@ build/
 *.db
 *.sqlite
 *.sqlite3
+
+# Local knowledge graph (not versioned)
+graphify-out/

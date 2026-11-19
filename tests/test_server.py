@@ -9,6 +9,7 @@ from jarvis.agents.orchestrator import DualAgentOrchestrator, OrchestratorResult
 from jarvis.hub.server import app
 from jarvis.tools.agenda import AgendaStore
 from jarvis.tools.app_control import AppController
+from jarvis.voice.tts import TTSError
 
 
 class FakeBackend:
@@ -146,3 +147,99 @@ def test_websocket_handles_orchestrator_exception_without_dropping() -> None:
             ok_resp = ws.receive_json()
             assert ok_resp["approved"] is True
             assert ok_resp["response"] == "Recuperado"
+
+
+def test_index_contains_hud_and_api_hooks() -> None:
+    client = TestClient(app)
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert "#050a12" in resp.text
+    assert "#00d4ff" in resp.text
+    assert "/api/tts" in resp.text
+    assert "/api/agenda" in resp.text
+    assert "/api/apps" in resp.text
+
+
+def test_tts_endpoint_success_and_errors() -> None:
+    mock_engine = MagicMock()
+    mock_engine.synthesize_wav = AsyncMock(return_value=b"RIFF\x00\x00\x00\x00WAVE")
+
+    with patch("jarvis.hub.server.get_tts_engine", return_value=mock_engine):
+        client = TestClient(app)
+        resp = client.post("/api/tts", json={"text": "Hola señor"})
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "audio/wav"
+        assert resp.content.startswith(b"RIFF")
+
+    mock_engine.synthesize_wav = AsyncMock(side_effect=ValueError("Texto vacío"))
+    with patch("jarvis.hub.server.get_tts_engine", return_value=mock_engine):
+        client = TestClient(app)
+        resp = client.post("/api/tts", json={"text": ""})
+        assert resp.status_code == 400
+
+    mock_engine.synthesize_wav = AsyncMock(side_effect=TTSError("Sin voz"))
+    with patch("jarvis.hub.server.get_tts_engine", return_value=mock_engine):
+        client = TestClient(app)
+        resp = client.post("/api/tts", json={"text": "Hola"})
+        assert resp.status_code == 503
+        assert "Sin voz" in resp.json()["detail"]
+
+
+def test_agenda_endpoints() -> None:
+    store = AgendaStore(":memory:")
+    try:
+        store.add_event("Pasado", "2000-01-01T10:00:00", "viejo")
+        store.add_event("Futuro", "2099-01-01T10:00:00", "nuevo")
+
+        with patch("jarvis.hub.server.get_agenda_store", return_value=store):
+            client = TestClient(app)
+
+            all_resp = client.get("/api/agenda")
+            assert all_resp.status_code == 200
+            titles = [e["title"] for e in all_resp.json()["events"]]
+            assert titles == ["Pasado", "Futuro"]
+
+            up_resp = client.get("/api/agenda?upcoming=true")
+            assert up_resp.status_code == 200
+            up_titles = [e["title"] for e in up_resp.json()["events"]]
+            assert up_titles == ["Futuro"]
+
+            create_resp = client.post(
+                "/api/agenda",
+                json={"title": "Revisión", "when": "2099-06-01T09:00:00", "notes": "HUD"},
+            )
+            assert create_resp.status_code == 201
+            assert create_resp.json()["event"]["title"] == "Revisión"
+    finally:
+        store.close()
+
+
+def test_apps_endpoints() -> None:
+    controller = AppController(discover=False)
+    mock_proc = MagicMock()
+    mock_proc.pid = 4321
+
+    with patch("jarvis.hub.server.get_app_controller", return_value=controller):
+        client = TestClient(app)
+
+        list_resp = client.get("/api/apps")
+        assert list_resp.status_code == 200
+        assert "notepad" in list_resp.json()["apps"]
+
+        with patch.object(controller, "launch_app", return_value=mock_proc) as launch_mock:
+            open_resp = client.post("/api/apps/open", json={"app_name": "notepad"})
+            assert open_resp.status_code == 200
+            assert open_resp.json()["status"] == "opened"
+            assert open_resp.json()["pid"] == 4321
+            launch_mock.assert_called_once_with("notepad")
+
+        with patch.object(
+            controller,
+            "close_app",
+            return_value={"process": "notepad.exe", "returncode": 0, "stdout": "", "stderr": ""},
+        ) as close_mock:
+            close_resp = client.post("/api/apps/close", json={"app_name": "notepad"})
+            assert close_resp.status_code == 200
+            assert close_resp.json()["status"] == "closed"
+            assert close_resp.json()["process"] == "notepad.exe"
+            close_mock.assert_called_once_with("notepad")

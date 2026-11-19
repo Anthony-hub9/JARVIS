@@ -5,12 +5,14 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
+from pydantic import BaseModel
 
 from jarvis.agents.orchestrator import DualAgentOrchestrator, OllamaBackend
 from jarvis.config import settings
 from jarvis.tools.agenda import AgendaStore
 from jarvis.tools.app_control import AppController
+from jarvis.voice.tts import LocalTTSEngine, TTSError
 
 app = FastAPI(title="JARVIS Hub Central", version="0.1.0")
 
@@ -18,6 +20,21 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 _agenda_store: AgendaStore | None = None
 _app_controller: AppController | None = None
+_tts_engine: LocalTTSEngine | None = None
+
+
+class TTSRequest(BaseModel):
+    text: str
+
+
+class AgendaCreateRequest(BaseModel):
+    title: str
+    when: str
+    notes: str = ""
+
+
+class AppActionRequest(BaseModel):
+    app_name: str
 
 
 def get_agenda_store() -> AgendaStore:
@@ -32,6 +49,13 @@ def get_app_controller() -> AppController:
     if _app_controller is None:
         _app_controller = AppController()
     return _app_controller
+
+
+def get_tts_engine() -> LocalTTSEngine:
+    global _tts_engine
+    if _tts_engine is None:
+        _tts_engine = LocalTTSEngine()
+    return _tts_engine
 
 
 def get_orchestrator() -> DualAgentOrchestrator:
@@ -89,6 +113,84 @@ async def health() -> dict[str, str]:
         "supervisor": settings.supervisor_model,
         "vision": settings.vision_model,
     }
+
+
+@app.post("/api/tts")
+async def synthesize_tts(payload: TTSRequest) -> Response:
+    engine = get_tts_engine()
+    try:
+        wav_bytes = await engine.synthesize_wav(payload.text)
+    except ValueError as exc:
+        return JSONResponse(status_code=400, content={"detail": str(exc)})
+    except (TTSError, Exception) as exc:
+        return JSONResponse(status_code=503, content={"detail": str(exc)})
+    return Response(content=wav_bytes, media_type="audio/wav")
+
+
+@app.get("/api/agenda")
+async def list_agenda(upcoming: bool = False) -> dict[str, Any]:
+    store = get_agenda_store()
+    events = store.upcoming_reminders() if upcoming else store.list_events()
+    return {
+        "events": [
+            {"id": ev.id, "title": ev.title, "when": ev.when, "notes": ev.notes}
+            for ev in events
+        ]
+    }
+
+
+@app.post("/api/agenda")
+async def create_agenda_event(payload: AgendaCreateRequest) -> JSONResponse:
+    title = payload.title.strip()
+    when = payload.when.strip()
+    if not title or not when:
+        return JSONResponse(
+            status_code=400,
+            content={"detail": "Los campos 'title' y 'when' son obligatorios."},
+        )
+    event = get_agenda_store().add_event(title=title, when=when, notes=payload.notes.strip())
+    return JSONResponse(
+        status_code=201,
+        content={
+            "event": {
+                "id": event.id,
+                "title": event.title,
+                "when": event.when,
+                "notes": event.notes,
+            }
+        },
+    )
+
+
+@app.get("/api/apps")
+async def list_apps() -> dict[str, list[str]]:
+    apps = get_app_controller().list_available_apps()
+    return {"apps": apps}
+
+
+@app.post("/api/apps/open")
+async def open_app_endpoint(payload: AppActionRequest) -> JSONResponse:
+    try:
+        proc = get_app_controller().launch_app(payload.app_name)
+    except ValueError as exc:
+        return JSONResponse(status_code=400, content={"detail": str(exc)})
+    except Exception as exc:
+        return JSONResponse(status_code=500, content={"detail": str(exc)})
+    return JSONResponse(
+        status_code=200,
+        content={"status": "opened", "app": payload.app_name, "pid": getattr(proc, "pid", None)},
+    )
+
+
+@app.post("/api/apps/close")
+async def close_app_endpoint(payload: AppActionRequest) -> JSONResponse:
+    try:
+        result = get_app_controller().close_app(payload.app_name)
+    except ValueError as exc:
+        return JSONResponse(status_code=400, content={"detail": str(exc)})
+    except Exception as exc:
+        return JSONResponse(status_code=500, content={"detail": str(exc)})
+    return JSONResponse(status_code=200, content={"status": "closed", **result})
 
 
 @app.websocket("/ws/{device_id}")

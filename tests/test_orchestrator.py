@@ -339,7 +339,7 @@ async def test_orchestrator_executes_memory_save_and_search_tools() -> None:
             fast_supervisor=True,
         )
 
-        save_res = await orch.run("Recuerda que mi café favorito es americano sin azúcar", device_id="laptop")
+        save_res = await orch.run("Mi café favorito es americano sin azúcar", device_id="laptop")
         assert save_res.approved is True
         assert save_res.tool_result is not None
         assert save_res.tool_result["tool"] == "memory_save"
@@ -519,5 +519,105 @@ async def test_fast_command_router_s24_plus_builds_mobile_intent_without_laptop_
         assert res.tool_result["intent"]["requires_native_bridge"] is True
         app_controller.launch_app.assert_not_called()
         assert len(backend.calls) == 0
+    finally:
+        memory.close()
+
+
+@pytest.mark.asyncio
+async def test_fast_command_router_web_search_and_records_turns() -> None:
+    memory = MemoryStore(":memory:")
+    fake_results = [
+        {
+            "title": "Clima CDMX",
+            "url": "https://example.com/clima",
+            "snippet": "22°C mayormente soleado.",
+        }
+    ]
+    web_tool = MagicMock(spec=WebSearchTool)
+    web_tool.search.return_value = fake_results
+    backend = MockBackend(["Hoy en CDMX hay 22°C y cielo mayormente soleado."])
+    try:
+        orch = DualAgentOrchestrator(
+            backend=backend,
+            memory_store=memory,
+            web_search=web_tool,
+            fast_supervisor=True,
+        )
+
+        res = await orch.run("busca clima cdmx hoy", device_id="pc")
+        assert res.approved is True
+        assert res.attempts == 1
+        assert res.response == "Hoy en CDMX hay 22°C y cielo mayormente soleado."
+        assert res.tool_result == {
+            "tool": "web_search",
+            "query": "clima cdmx hoy",
+            "results": fake_results,
+        }
+        web_tool.search.assert_called_once_with("clima cdmx hoy", max_results=3)
+        assert len(backend.calls) == 1
+        assert "Resume de forma breve" in backend.calls[0][1]
+
+        turns = memory.recent_turns(limit=10)
+        assert len(turns) == 2
+        assert turns[0].role == "user"
+        assert turns[0].content == "busca clima cdmx hoy"
+        assert turns[1].role == "assistant"
+        assert turns[1].content == "Hoy en CDMX hay 22°C y cielo mayormente soleado."
+    finally:
+        memory.close()
+
+
+@pytest.mark.asyncio
+async def test_fast_command_router_memory_save_and_search() -> None:
+    memory = MemoryStore(":memory:")
+    backend = MockBackend([])
+    try:
+        orch = DualAgentOrchestrator(
+            backend=backend,
+            memory_store=memory,
+            fast_supervisor=True,
+        )
+
+        save_res = await orch.run("recuerda que mi campeón favorito es Yasuo", device_id="pc")
+        assert save_res.approved is True
+        assert save_res.attempts == 1
+        assert save_res.tool_result is not None
+        assert save_res.tool_result["tool"] == "memory_save"
+        assert save_res.tool_result["fact"]["key"] == "mi campeón favorito es"
+        assert save_res.tool_result["fact"]["value"] == "mi campeón favorito es Yasuo"
+
+        search_res = await orch.run("qué recuerdas de Yasuo", device_id="s24")
+        assert search_res.approved is True
+        assert search_res.attempts == 1
+        assert search_res.tool_result is not None
+        assert search_res.tool_result["tool"] == "memory_search"
+        assert search_res.tool_result["query"] == "Yasuo"
+        assert len(search_res.tool_result["facts"]) == 1
+        assert "Yasuo" in search_res.tool_result["facts"][0]["value"]
+        assert "Yasuo" in search_res.response
+        assert len(backend.calls) == 0
+    finally:
+        memory.close()
+
+
+@pytest.mark.asyncio
+async def test_saved_facts_are_injected_into_normal_chat_prompts() -> None:
+    memory = MemoryStore(":memory:")
+    memory.save_fact("mi campeón favorito es", "mi campeón favorito es Yasuo")
+    backend = MockBackend(["Tu campeón favorito es Yasuo."])
+    try:
+        orch = DualAgentOrchestrator(
+            backend=backend,
+            memory_store=memory,
+            fast_supervisor=True,
+        )
+
+        res = await orch.run("¿Cuál es mi campeón favorito?", device_id="pc")
+        assert res.approved is True
+        assert res.response == "Tu campeón favorito es Yasuo."
+        assert len(backend.calls) == 1
+        prompt = backend.calls[0][1]
+        assert "[Hechos guardados]" in prompt
+        assert "mi campeón favorito es Yasuo" in prompt
     finally:
         memory.close()

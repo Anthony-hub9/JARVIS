@@ -34,6 +34,49 @@ _DIRECT_AGENDA_LIST_RE = re.compile(
     r"^(?:jarvis[,\s]+)?(?:ver|muestra|mostrar|lista|listar|dime)\s+(?:mi\s+)?(?:agenda|recordatorios)[.!?\s]*$",
     re.IGNORECASE,
 )
+_DIRECT_WEB_SEARCH_RE = re.compile(
+    r"^(?:jarvis[,\s]+)?(?:busca|buscar|b[uú]scame|investiga|investigar|googlea|search)\s+(?:en\s+(?:internet|la\s+web|google)\s+)?(.+?)[.!?\s]*$",
+    re.IGNORECASE,
+)
+_DIRECT_MEMORY_SAVE_RE = re.compile(
+    r"^(?:jarvis[,\s]+)?(?:recuerda\s+que|memoriza\s+que|guarda\s+(?:en\s+(?:tu\s+)?memoria\s+)?que|anota\s+que)\s+(.+?)[.!?\s]*$",
+    re.IGNORECASE,
+)
+_DIRECT_MEMORY_SEARCH_RE = re.compile(
+    r"^(?:jarvis[,\s]+)?(?:qu[eé]\s+recuerdas(?:\s+de|\s+sobre)?|qu[eé]\s+sabes(?:\s+de|\s+sobre)?|qu[eé]\s+te\s+dije(?:\s+de|\s+sobre)?)\s+(.+?)[.!?\s]*$",
+    re.IGNORECASE,
+)
+_FACT_SEARCH_STOPWORDS = {
+    "que",
+    "qué",
+    "con",
+    "por",
+    "para",
+    "como",
+    "cómo",
+    "cual",
+    "cuál",
+    "sobre",
+    "una",
+    "uno",
+    "unos",
+    "unas",
+    "los",
+    "las",
+    "del",
+    "the",
+    "and",
+    "for",
+    "with",
+    "what",
+    "who",
+    "how",
+    "dime",
+    "algo",
+    "sabes",
+    "recuerdas",
+    "jarvis",
+}
 
 
 class AgentBackend(Protocol):
@@ -97,7 +140,7 @@ def _parse_tool_call(candidate: str) -> dict[str, Any] | None:
 
 def _route_direct_tool(user_input: str) -> dict[str, Any] | None:
     """Deterministically route unambiguous local commands to tool JSON without LLM."""
-    text = user_input.strip()
+    text = user_input.strip().lstrip("¿¡").strip()
     if not text:
         return None
 
@@ -115,6 +158,25 @@ def _route_direct_tool(user_input: str) -> dict[str, Any] | None:
         app_name = close_match.group(1).strip()
         if app_name:
             return {"tool": "app_close", "app_name": app_name}
+
+    web_match = _DIRECT_WEB_SEARCH_RE.match(text)
+    if web_match:
+        query = web_match.group(1).strip()
+        if query:
+            return {"tool": "web_search", "query": query}
+
+    save_match = _DIRECT_MEMORY_SAVE_RE.match(text)
+    if save_match:
+        value = save_match.group(1).strip()
+        if value:
+            key = " ".join(value.split()[:4])
+            return {"tool": "memory_save", "key": key, "value": value}
+
+    mem_search_match = _DIRECT_MEMORY_SEARCH_RE.match(text)
+    if mem_search_match:
+        query = mem_search_match.group(1).strip()
+        if query:
+            return {"tool": "memory_search", "query": query}
 
     return None
 
@@ -438,8 +500,8 @@ class DualAgentOrchestrator:
             {"tool": tool_name, "error": "Unknown tool"},
         )
 
-    @staticmethod
     def _build_executor_prompt(
+        self,
         user_input: str,
         device_id: str,
         feedback: str,
@@ -451,11 +513,33 @@ class DualAgentOrchestrator:
             lines = [f"- [{t.device_id}] {t.role}: {t.content}" for t in recent_turns]
             history_block = "Contexto reciente compartido (entre dispositivos):\n" + "\n".join(lines) + "\n\n"
 
+        facts_block = ""
+        if self.memory_store is not None and user_input.strip():
+            facts = self.memory_store.search_facts(user_input, limit=3)
+            if not facts:
+                seen_ids: set[int] = set()
+                words = re.findall(r"[a-zA-ZáéíóúüñÁÉÍÓÚÜÑ0-9]+", user_input.lower())
+                for word in words:
+                    if len(word) < 3 or word in _FACT_SEARCH_STOPWORDS:
+                        continue
+                    for fact in self.memory_store.search_facts(word, limit=3):
+                        if fact.id not in seen_ids:
+                            seen_ids.add(fact.id)
+                            facts.append(fact)
+                        if len(facts) >= 3:
+                            break
+                    if len(facts) >= 3:
+                        break
+            if facts:
+                fact_lines = [f"- {f.key}: {f.value}" for f in facts]
+                facts_block = "[Hechos guardados]\n" + "\n".join(fact_lines) + "\n\n"
+
         if has_images:
             base = (
                 "Eres el módulo de visión táctica de JARVIS (100% local en Ollama).\n"
                 "Analiza la captura adjunta y da una respuesta breve, clara y accionable "
                 "(advierte sobre munición baja, salud baja, enemigos o consejos tácticos).\n\n"
+                f"{facts_block}"
                 f"{history_block}"
                 f"[Dispositivo: {device_id}]\nSolicitud: {user_input}"
             )
@@ -472,6 +556,7 @@ class DualAgentOrchestrator:
                 '- {"tool": "memory_search", "query": "..."}\n'
                 '- {"tool": "web_search", "query": "..."}\n'
                 "Si es una conversación o pregunta general, responde directamente en texto natural.\n\n"
+                f"{facts_block}"
                 f"{history_block}"
                 f"[Dispositivo: {device_id}]\nUsuario: {user_input}"
             )

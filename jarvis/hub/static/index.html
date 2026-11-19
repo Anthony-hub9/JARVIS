@@ -1,0 +1,730 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>JARVIS — Asistente Local</title>
+  <style>
+    :root {
+      --bg: #0b0f17;
+      --surface: #131a26;
+      --surface-2: #1b2436;
+      --border: #273248;
+      --text: #e6edf7;
+      --muted: #8b9bb4;
+      --accent: #38bdf8;
+      --accent-dim: rgba(56, 189, 248, 0.14);
+      --user-bg: #1d4ed8;
+      --ok: #22c55e;
+      --ok-bg: rgba(34, 197, 94, 0.14);
+      --warn: #f59e0b;
+      --warn-bg: rgba(245, 158, 11, 0.15);
+      --err: #ef4444;
+      --err-bg: rgba(239, 68, 68, 0.15);
+      --radius: 14px;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html, body {
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, sans-serif;
+      font-size: 15px;
+      line-height: 1.45;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .app {
+      display: flex;
+      flex-direction: column;
+      height: 100dvh;
+      max-width: 860px;
+      margin: 0 auto;
+      background: var(--bg);
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 12px 14px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .logo {
+      width: 34px;
+      height: 34px;
+      border-radius: 10px;
+      background: var(--accent-dim);
+      border: 1px solid rgba(56, 189, 248, 0.35);
+      display: grid;
+      place-items: center;
+      color: var(--accent);
+      font-weight: 700;
+      font-size: 15px;
+      flex-shrink: 0;
+    }
+
+    .brand-text h1 {
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+    }
+
+    .status-line {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--warn);
+      flex-shrink: 0;
+    }
+
+    .dot.connected { background: var(--ok); }
+    .dot.disconnected { background: var(--err); }
+
+    .controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+
+    select, button {
+      font: inherit;
+      color: var(--text);
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s, opacity 0.15s;
+    }
+
+    select {
+      padding: 7px 10px;
+      font-size: 13px;
+      min-height: 38px;
+    }
+
+    .icon-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+      min-width: 40px;
+      min-height: 38px;
+      padding: 0 10px;
+      font-size: 13px;
+    }
+
+    .icon-btn:hover:not(:disabled), select:hover {
+      border-color: var(--accent);
+    }
+
+    .icon-btn.active {
+      background: var(--accent-dim);
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    .icon-btn:disabled {
+      opacity: 0.42;
+      cursor: not-allowed;
+    }
+
+    #chat {
+      flex: 1;
+      overflow-y: auto;
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .empty-state {
+      margin: auto;
+      text-align: center;
+      max-width: 340px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .empty-state strong {
+      display: block;
+      color: var(--text);
+      font-size: 16px;
+      margin-bottom: 6px;
+    }
+
+    .msg {
+      display: flex;
+      flex-direction: column;
+      max-width: 88%;
+      gap: 5px;
+    }
+
+    .msg.user {
+      align-self: flex-end;
+      align-items: flex-end;
+    }
+
+    .msg.bot {
+      align-self: flex-start;
+      align-items: flex-start;
+    }
+
+    .msg.system {
+      align-self: center;
+      max-width: 95%;
+    }
+
+    .bubble {
+      padding: 10px 14px;
+      border-radius: var(--radius);
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .msg.user .bubble {
+      background: var(--user-bg);
+      color: #fff;
+      border-bottom-right-radius: 4px;
+    }
+
+    .msg.bot .bubble {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-bottom-left-radius: 4px;
+    }
+
+    .msg.system .bubble {
+      background: transparent;
+      color: var(--muted);
+      font-size: 12px;
+      padding: 4px 10px;
+    }
+
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+      font-size: 11.5px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-weight: 600;
+    }
+
+    .badge.ok { background: var(--ok-bg); color: var(--ok); }
+    .badge.warn { background: var(--warn-bg); color: var(--warn); }
+    .badge.err { background: var(--err-bg); color: var(--err); }
+    .badge.neutral { background: var(--surface-2); color: var(--muted); }
+
+    .tool-box {
+      margin-top: 6px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      color: var(--muted);
+      max-width: 100%;
+      overflow-x: auto;
+    }
+
+    .quick-actions {
+      display: flex;
+      gap: 8px;
+      padding: 8px 14px 4px;
+      overflow-x: auto;
+      flex-shrink: 0;
+      scrollbar-width: none;
+    }
+
+    .quick-actions::-webkit-scrollbar { display: none; }
+
+    .chip {
+      padding: 7px 12px;
+      border-radius: 999px;
+      font-size: 13px;
+      white-space: nowrap;
+      background: var(--surface);
+      border: 1px solid var(--border);
+    }
+
+    .chip:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    .composer {
+      display: flex;
+      align-items: flex-end;
+      gap: 8px;
+      padding: 10px 14px calc(12px + env(safe-area-inset-bottom));
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    #promptInput {
+      flex: 1;
+      min-height: 44px;
+      max-height: 130px;
+      resize: none;
+      padding: 10px 12px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+      font: inherit;
+      outline: none;
+    }
+
+    #promptInput:focus {
+      border-color: var(--accent);
+    }
+
+    .send-btn {
+      min-width: 48px;
+      min-height: 44px;
+      padding: 0 16px;
+      background: var(--accent);
+      color: #06121e;
+      border: none;
+      font-weight: 700;
+      border-radius: 12px;
+    }
+
+    .send-btn:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+
+    .mic-btn.listening {
+      background: var(--err-bg);
+      border-color: var(--err);
+      color: var(--err);
+    }
+
+    @media (min-width: 640px) {
+      .app {
+        border-left: 1px solid var(--border);
+        border-right: 1px solid var(--border);
+      }
+      .msg { max-width: 76%; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <div class="brand">
+        <div class="logo">J</div>
+        <div class="brand-text">
+          <h1>JARVIS</h1>
+          <div class="status-line">
+            <span id="statusDot" class="dot"></span>
+            <span id="statusText">Conectando...</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="controls">
+        <select id="deviceSelect" aria-label="Dispositivo">
+          <option value="laptop">Laptop</option>
+          <option value="s24-plus">Galaxy S24+</option>
+        </select>
+        <button id="ttsToggle" type="button" class="icon-btn" title="Activar/desactivar respuesta por voz">
+          🔇 Voz
+        </button>
+      </div>
+    </header>
+
+    <main id="chat">
+      <div class="empty-state" id="emptyState">
+        <strong>JARVIS Hub Local</strong>
+        Escribe o usa una acción rápida para consultar tu agenda, crear recordatorios o controlar apps.
+      </div>
+    </main>
+
+    <div class="quick-actions" aria-label="Acciones rápidas">
+      <button type="button" class="chip" data-send="¿Qué tengo en mi agenda?">📅 Ver agenda</button>
+      <button type="button" class="chip" data-fill="Recuérdame ">⏰ Recordatorio</button>
+      <button type="button" class="chip" data-fill="Abre ">🚀 Abrir app</button>
+      <button type="button" class="chip" data-fill="Cierra ">🛑 Cerrar app</button>
+    </div>
+
+    <form class="composer" id="composer">
+      <button id="micBtn" type="button" class="icon-btn mic-btn" aria-label="Entrada por voz">🎤</button>
+      <textarea
+        id="promptInput"
+        rows="1"
+        placeholder="Escribe un mensaje para JARVIS..."
+        autocomplete="off"
+      ></textarea>
+      <button id="sendBtn" type="submit" class="send-btn">Enviar</button>
+    </form>
+  </div>
+
+  <script>
+    (() => {
+      const chatEl = document.getElementById("chat");
+      const emptyState = document.getElementById("emptyState");
+      const statusDot = document.getElementById("statusDot");
+      const statusText = document.getElementById("statusText");
+      const deviceSelect = document.getElementById("deviceSelect");
+      const ttsToggle = document.getElementById("ttsToggle");
+      const micBtn = document.getElementById("micBtn");
+      const promptInput = document.getElementById("promptInput");
+      const sendBtn = document.getElementById("sendBtn");
+      const composer = document.getElementById("composer");
+
+      const savedDevice = localStorage.getItem("jarvis_device_id");
+      if (savedDevice === "laptop" || savedDevice === "s24-plus") {
+        deviceSelect.value = savedDevice;
+      } else if (/android|mobile/i.test(navigator.userAgent)) {
+        deviceSelect.value = "s24-plus";
+      }
+
+      let ws = null;
+      let reconnectTimer = null;
+      let pendingEl = null;
+      let ttsEnabled = localStorage.getItem("jarvis_tts") === "1";
+
+      function setStatus(state, label) {
+        statusDot.className = "dot " + state;
+        statusText.textContent = label;
+      }
+
+      function scrollToBottom() {
+        chatEl.scrollTop = chatEl.scrollHeight;
+      }
+
+      function removeEmptyState() {
+        if (emptyState && emptyState.parentNode) {
+          emptyState.remove();
+        }
+      }
+
+      function addSystemMessage(text) {
+        removeEmptyState();
+        const wrap = document.createElement("div");
+        wrap.className = "msg system";
+        const bubble = document.createElement("div");
+        bubble.className = "bubble";
+        bubble.textContent = text;
+        wrap.appendChild(bubble);
+        chatEl.appendChild(wrap);
+        scrollToBottom();
+      }
+
+      function addUserMessage(text) {
+        removeEmptyState();
+        const wrap = document.createElement("div");
+        wrap.className = "msg user";
+        const bubble = document.createElement("div");
+        bubble.className = "bubble";
+        bubble.textContent = text;
+        wrap.appendChild(bubble);
+        chatEl.appendChild(wrap);
+        scrollToBottom();
+      }
+
+      function showPending() {
+        removePending();
+        const wrap = document.createElement("div");
+        wrap.className = "msg bot";
+        const bubble = document.createElement("div");
+        bubble.className = "bubble";
+        bubble.textContent = "Pensando...";
+        wrap.appendChild(bubble);
+        chatEl.appendChild(wrap);
+        pendingEl = wrap;
+        scrollToBottom();
+      }
+
+      function removePending() {
+        if (pendingEl && pendingEl.parentNode) {
+          pendingEl.remove();
+        }
+        pendingEl = null;
+      }
+
+      function addBotMessage(data) {
+        removeEmptyState();
+        removePending();
+
+        const wrap = document.createElement("div");
+        wrap.className = "msg bot";
+
+        const bubble = document.createElement("div");
+        bubble.className = "bubble";
+        bubble.textContent = data.response || "(Sin respuesta)";
+        wrap.appendChild(bubble);
+
+        if (data.tool_result !== null && data.tool_result !== undefined) {
+          const toolBox = document.createElement("pre");
+          toolBox.className = "tool-box";
+          toolBox.textContent = JSON.stringify(data.tool_result, null, 2);
+          wrap.appendChild(toolBox);
+        }
+
+        const meta = document.createElement("div");
+        meta.className = "meta";
+
+        const supBadge = document.createElement("span");
+        if (data.circuit_broken) {
+          supBadge.className = "badge err";
+          supBadge.textContent = "⚡ Circuit Breaker";
+        } else if (data.approved) {
+          supBadge.className = "badge ok";
+          supBadge.textContent = "✓ Aprobado";
+        } else {
+          supBadge.className = "badge warn";
+          supBadge.textContent = "⚠ No aprobado";
+        }
+        meta.appendChild(supBadge);
+
+        if (typeof data.attempts === "number") {
+          const attBadge = document.createElement("span");
+          attBadge.className = "badge neutral";
+          attBadge.textContent = `Intentos: ${data.attempts}`;
+          meta.appendChild(attBadge);
+        }
+
+        wrap.appendChild(meta);
+        chatEl.appendChild(wrap);
+        scrollToBottom();
+
+        if (ttsEnabled && data.response) {
+          speak(data.response);
+        }
+      }
+
+      function connect() {
+        if (reconnectTimer) {
+          clearTimeout(reconnectTimer);
+          reconnectTimer = null;
+        }
+        if (ws) {
+          ws.onclose = null;
+          ws.close();
+          ws = null;
+        }
+
+        const deviceId = encodeURIComponent(deviceSelect.value);
+        const wsProto = window.location.protocol === "https:" ? "wss:" : "ws:";
+        const wsUrl = `${wsProto}//${window.location.host}/ws/${deviceId}`;
+
+        setStatus("", `Conectando (${deviceSelect.value})...`);
+        ws = new WebSocket(wsUrl);
+
+        ws.onopen = () => {
+          setStatus("connected", `Conectado · ${deviceSelect.value}`);
+        };
+
+        ws.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            addBotMessage(data);
+          } catch {
+            addBotMessage({ response: String(event.data), approved: true });
+          }
+          sendBtn.disabled = false;
+        };
+
+        ws.onerror = () => {
+          setStatus("disconnected", "Error de conexión");
+        };
+
+        ws.onclose = () => {
+          removePending();
+          sendBtn.disabled = false;
+          setStatus("disconnected", "Desconectado · reintentando...");
+          reconnectTimer = setTimeout(connect, 2500);
+        };
+      }
+
+      function sendMessage(text) {
+        const clean = text.trim();
+        if (!clean) return;
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+          addSystemMessage("Sin conexión con el servidor. Reintentando...");
+          connect();
+          return;
+        }
+        addUserMessage(clean);
+        showPending();
+        sendBtn.disabled = true;
+        ws.send(clean);
+        promptInput.value = "";
+        promptInput.style.height = "auto";
+      }
+
+      deviceSelect.addEventListener("change", () => {
+        localStorage.setItem("jarvis_device_id", deviceSelect.value);
+        addSystemMessage(`Cambiando dispositivo a ${deviceSelect.value}...`);
+        connect();
+      });
+
+      composer.addEventListener("submit", (e) => {
+        e.preventDefault();
+        sendMessage(promptInput.value);
+      });
+
+      promptInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          sendMessage(promptInput.value);
+        }
+      });
+
+      promptInput.addEventListener("input", () => {
+        promptInput.style.height = "auto";
+        promptInput.style.height = Math.min(promptInput.scrollHeight, 130) + "px";
+      });
+
+      document.querySelectorAll(".chip").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const toSend = btn.getAttribute("data-send");
+          const toFill = btn.getAttribute("data-fill");
+          if (toSend) {
+            sendMessage(toSend);
+          } else if (toFill) {
+            promptInput.value = toFill;
+            promptInput.focus();
+          }
+        });
+      });
+
+      // Voice Output (TTS)
+      function updateTtsButton() {
+        if (!("speechSynthesis" in window)) {
+          ttsToggle.disabled = true;
+          ttsToggle.textContent = "🔇 Voz";
+          ttsToggle.title = "Tu navegador no soporta síntesis de voz (speechSynthesis).";
+          return;
+        }
+        ttsToggle.classList.toggle("active", ttsEnabled);
+        ttsToggle.textContent = ttsEnabled ? "🔊 Voz" : "🔇 Voz";
+      }
+
+      function speak(text) {
+        if (!("speechSynthesis" in window)) return;
+        window.speechSynthesis.cancel();
+        const utter = new SpeechSynthesisUtterance(text);
+        const voices = window.speechSynthesis.getVoices();
+        const esVoice =
+          voices.find((v) => v.lang.toLowerCase().startsWith("es-mx")) ||
+          voices.find((v) => v.lang.toLowerCase().startsWith("es-es")) ||
+          voices.find((v) => v.lang.toLowerCase().startsWith("es"));
+        if (esVoice) {
+          utter.voice = esVoice;
+          utter.lang = esVoice.lang;
+        } else {
+          utter.lang = "es-MX";
+        }
+        window.speechSynthesis.speak(utter);
+      }
+
+      ttsToggle.addEventListener("click", () => {
+        ttsEnabled = !ttsEnabled;
+        localStorage.setItem("jarvis_tts", ttsEnabled ? "1" : "0");
+        if (!ttsEnabled && "speechSynthesis" in window) {
+          window.speechSynthesis.cancel();
+        }
+        updateTtsButton();
+      });
+
+      // Voice Input (STT)
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      let recognition = null;
+      let listening = false;
+
+      if (!SpeechRecognition) {
+        micBtn.disabled = true;
+        micBtn.title = "Entrada de voz no soportada en este navegador.";
+      } else if (!window.isSecureContext) {
+        micBtn.disabled = true;
+        micBtn.title = "El micrófono requiere HTTPS o localhost (bloqueado por HTTP en red local).";
+      } else {
+        recognition = new SpeechRecognition();
+        recognition.lang = "es-MX";
+        recognition.interimResults = false;
+        recognition.maxAlternatives = 1;
+
+        recognition.onstart = () => {
+          listening = true;
+          micBtn.classList.add("listening");
+          micBtn.title = "Escuchando... toca para detener";
+        };
+
+        recognition.onend = () => {
+          listening = false;
+          micBtn.classList.remove("listening");
+          micBtn.title = "Hablar con JARVIS";
+        };
+
+        recognition.onresult = (event) => {
+          const transcript = event.results[0]?.[0]?.transcript || "";
+          if (transcript.trim()) {
+            sendMessage(transcript);
+          }
+        };
+
+        recognition.onerror = (event) => {
+          listening = false;
+          micBtn.classList.remove("listening");
+          if (event.error === "not-allowed" || event.error === "service-not-allowed") {
+            micBtn.disabled = true;
+            micBtn.title = "Permiso de micrófono denegado o bloqueado por HTTP.";
+          }
+        };
+
+        micBtn.title = "Hablar con JARVIS";
+        micBtn.addEventListener("click", () => {
+          if (listening) {
+            recognition.stop();
+          } else {
+            recognition.start();
+          }
+        });
+      }
+
+      updateTtsButton();
+      connect();
+    })();
+  </script>
+</body>
+</html>

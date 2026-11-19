@@ -21,6 +21,16 @@ class FakeBackend:
         return next(self._responses)
 
 
+def test_index_serves_web_client() -> None:
+    client = TestClient(app)
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert "text/html" in resp.headers.get("content-type", "")
+    assert "WebSocket" in resp.text
+    assert "/ws/" in resp.text
+    assert "s24-plus" in resp.text
+
+
 def test_health_endpoint() -> None:
     client = TestClient(app)
     resp = client.get("/health")

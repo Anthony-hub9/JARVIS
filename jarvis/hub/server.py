@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse
 
 from jarvis.agents.orchestrator import DualAgentOrchestrator, OllamaBackend
 from jarvis.config import settings
@@ -11,6 +13,8 @@ from jarvis.tools.agenda import AgendaStore
 from jarvis.tools.app_control import AppController
 
 app = FastAPI(title="JARVIS Hub Central", version="0.1.0")
+
+STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 _agenda_store: AgendaStore | None = None
 _app_controller: AppController | None = None
@@ -69,6 +73,11 @@ def _parse_ws_message(raw_message: str) -> tuple[str, list[str] | None]:
         except json.JSONDecodeError:
             pass
     return raw_message, None
+
+
+@app.get("/")
+async def index() -> FileResponse:
+    return FileResponse(STATIC_DIR / "index.html")
 
 
 @app.get("/health")

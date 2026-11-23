@@ -99,6 +99,7 @@ async def _reminder_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    await asyncio.to_thread(get_app_controller)
     task = asyncio.create_task(_reminder_loop())
     try:
         yield

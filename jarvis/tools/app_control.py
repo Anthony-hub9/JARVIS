@@ -6,12 +6,15 @@ import csv
 import difflib
 import io
 import json
+import logging
 import os
 import re
 import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 WINDOWS_APP_ALLOWLIST: dict[str, list[str]] = {
     "notepad": ["notepad.exe"],
@@ -203,15 +206,25 @@ def _scan_start_apps(timeout: float = 30.0) -> dict[str, list[str]]:
             timeout=timeout,
             check=False,
         )
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.warning("Failed to run Get-StartApps: %s", exc)
         return discovered
 
-    if result.returncode != 0 or not result.stdout or not result.stdout.strip():
+    if result.returncode != 0:
+        logger.warning(
+            "Get-StartApps exited with code %s: %s",
+            result.returncode,
+            (result.stderr or "").strip(),
+        )
+        return discovered
+
+    if not result.stdout or not result.stdout.strip():
         return discovered
 
     try:
         payload = json.loads(result.stdout)
-    except (json.JSONDecodeError, TypeError, ValueError):
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        logger.warning("Failed to parse Get-StartApps JSON output: %s", exc)
         return discovered
 
     items = [payload] if isinstance(payload, dict) else payload
@@ -314,6 +327,7 @@ class AppController:
 
     def list_available_apps(self) -> list[str]:
         """Return sorted list of known application names."""
+        self.refresh_uwp_if_needed()
         return sorted(set(self.allowlist) | set(self._discovered))
 
     def _prefer_allowlist(self, key: str, cmd: list[str]) -> list[str]:

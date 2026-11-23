@@ -395,3 +395,34 @@ def test_calculadora_in_allowlist_and_lazy_uwp_retry() -> None:
         assert ctrl._uwp_scanned is True
         assert ctrl._resolve_entry("nonexistent") is None
     scan_mock.assert_called_once_with()
+
+
+def test_scan_start_apps_logs_warnings_and_list_available_refreshes_uwp(caplog) -> None:
+    with caplog.at_level("WARNING", logger="jarvis.tools.app_control"):
+        with patch(
+            "jarvis.tools.app_control.subprocess.run",
+            side_effect=OSError("no powershell"),
+        ):
+            assert _scan_start_apps() == {}
+        with patch(
+            "jarvis.tools.app_control.subprocess.run",
+            return_value=SimpleNamespace(returncode=1, stdout="", stderr="boom"),
+        ):
+            assert _scan_start_apps() == {}
+        with patch(
+            "jarvis.tools.app_control.subprocess.run",
+            return_value=SimpleNamespace(returncode=0, stdout="{bad json", stderr=""),
+        ):
+            assert _scan_start_apps() == {}
+
+    assert "Failed to run Get-StartApps" in caplog.text
+    assert "Get-StartApps exited with code 1" in caplog.text
+    assert "Failed to parse Get-StartApps JSON output" in caplog.text
+
+    with patch("jarvis.tools.app_control.discover_windows_apps", return_value={}):
+        ctrl = AppController(allowlist={}, discover=True)
+    uwp_whatsapp = ["explorer.exe", r"shell:AppsFolder\5319275A.WhatsAppDesktop_cv1g1gvanyjgm!App"]
+    with patch("jarvis.tools.app_control._scan_start_apps", return_value={"whatsapp": uwp_whatsapp}) as scan_mock:
+        apps = ctrl.list_available_apps()
+    assert apps == ["whatsapp"]
+    scan_mock.assert_called_once_with()

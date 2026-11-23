@@ -426,3 +426,28 @@ def test_scan_start_apps_logs_warnings_and_list_available_refreshes_uwp(caplog) 
         apps = ctrl.list_available_apps()
     assert apps == ["whatsapp"]
     scan_mock.assert_called_once_with()
+
+
+def test_resolve_powershell_exe_prefers_system_root_and_passes_to_scan(tmp_path: Path) -> None:
+    from jarvis.tools.app_control import _resolve_powershell_exe
+
+    ps_dir = tmp_path / "System32" / "WindowsPowerShell" / "v1.0"
+    ps_dir.mkdir(parents=True)
+    ps_exe = ps_dir / "powershell.exe"
+    ps_exe.write_text("", encoding="utf-8")
+
+    with patch.dict("jarvis.tools.app_control.os.environ", {"SystemRoot": str(tmp_path)}):
+        assert _resolve_powershell_exe() == str(ps_exe)
+        with patch(
+            "jarvis.tools.app_control.subprocess.run",
+            return_value=SimpleNamespace(returncode=0, stdout="[]", stderr=""),
+        ) as run_mock:
+            _scan_start_apps()
+    assert run_mock.call_args.args[0][0] == str(ps_exe)
+
+    missing_root = tmp_path / "missing"
+    with (
+        patch.dict("jarvis.tools.app_control.os.environ", {"SystemRoot": str(missing_root)}),
+        patch("jarvis.tools.app_control.shutil.which", return_value=r"C:\Alt\powershell.exe"),
+    ):
+        assert _resolve_powershell_exe() == r"C:\Alt\powershell.exe"

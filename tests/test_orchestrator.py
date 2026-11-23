@@ -660,3 +660,88 @@ async def test_fast_command_router_routes_spanish_reminder_to_agenda_add() -> No
         assert events[0].title == "revisar el horno"
     finally:
         store.close()
+
+
+@pytest.mark.asyncio
+async def test_fast_command_router_routes_system_tools() -> None:
+    from jarvis.agents.orchestrator import _route_direct_tool
+
+    assert _route_direct_tool("qué hora es") == {"tool": "system_time"}
+    assert _route_direct_tool("dime la hora") == {"tool": "system_time"}
+    assert _route_direct_tool("qué día es hoy") == {"tool": "system_time"}
+    assert _route_direct_tool("qué fecha es") == {"tool": "system_time"}
+
+    assert _route_direct_tool("batería") == {"tool": "system_status"}
+    assert _route_direct_tool("estado de la laptop") == {"tool": "system_status"}
+    assert _route_direct_tool("cuánta ram") == {"tool": "system_status"}
+    assert _route_direct_tool("uso de cpu") == {"tool": "system_status"}
+
+    assert _route_direct_tool("sube el volumen") == {"tool": "system_media", "action": "volume_up"}
+    assert _route_direct_tool("baja el volumen") == {"tool": "system_media", "action": "volume_down"}
+    assert _route_direct_tool("silencia") == {"tool": "system_media", "action": "mute"}
+    assert _route_direct_tool("pon pausa") == {"tool": "system_media", "action": "play_pause"}
+    assert _route_direct_tool("pausa") == {"tool": "system_media", "action": "play_pause"}
+    assert _route_direct_tool("reproduce") == {"tool": "system_media", "action": "play_pause"}
+    assert _route_direct_tool("siguiente canción") == {"tool": "system_media", "action": "next_track"}
+    assert _route_direct_tool("canción anterior") == {"tool": "system_media", "action": "prev_track"}
+
+    assert _route_direct_tool("abre descargas") == {"tool": "system_open_target", "target": "descargas"}
+    assert _route_direct_tool("abre documentos") == {"tool": "system_open_target", "target": "documentos"}
+    assert _route_direct_tool("abre escritorio") == {"tool": "system_open_target", "target": "escritorio"}
+    assert _route_direct_tool("abre youtube") == {"tool": "system_open_target", "target": "youtube"}
+    assert _route_direct_tool("abre github") == {"tool": "system_open_target", "target": "github"}
+    assert _route_direct_tool("abre google") == {"tool": "system_open_target", "target": "google"}
+
+    assert _route_direct_tool("bloquea la pantalla") == {"tool": "system_power", "action": "lock"}
+    assert _route_direct_tool("bloquea la laptop") == {"tool": "system_power", "action": "lock"}
+    assert _route_direct_tool("suspende la laptop") == {"tool": "system_power", "action": "sleep"}
+
+    fake_sys = MagicMock()
+    fake_sys.get_time_info.return_value = {
+        "time": "10:30",
+        "date": "23/11/2026",
+        "weekday": "lunes",
+        "formatted": "Son las 10:30 del lunes 23/11/2026",
+    }
+    fake_sys.get_system_status.return_value = {
+        "cpu_percent": 15.0,
+        "formatted": "Estado del sistema: CPU al 15.0%.",
+    }
+    fake_sys.media_action.return_value = "Subiendo el volumen."
+    fake_sys.open_target.return_value = "Abriendo youtube en el navegador."
+    fake_sys.power_action.return_value = "Bloqueando la pantalla."
+
+    backend = MockBackend([])
+    orch = DualAgentOrchestrator(backend=backend, system_controller=fake_sys, fast_supervisor=True)
+
+    time_res = await orch.run("qué hora es", device_id="pc")
+    assert time_res.approved is True
+    assert time_res.response == "Son las 10:30 del lunes 23/11/2026"
+    assert time_res.tool_result is not None and time_res.tool_result["tool"] == "system_time"
+
+    status_res = await orch.run("estado de la laptop", device_id="pc")
+    assert status_res.approved is True
+    assert "CPU al 15.0%" in status_res.response
+
+    media_res = await orch.run("sube el volumen", device_id="pc")
+    assert media_res.approved is True
+    fake_sys.media_action.assert_called_once_with("volume_up")
+
+    open_res = await orch.run("abre youtube", device_id="pc")
+    assert open_res.approved is True
+    fake_sys.open_target.assert_called_once_with("youtube")
+
+    # SAFE_FAST_TOOLS calls above must not invoke the LLM backend at all.
+    assert backend.calls == []
+
+    # system_power MUST go through supervisor validation even with fast_supervisor=True.
+    sup_backend = MockBackend(["APPROVED"])
+    sup_orch = DualAgentOrchestrator(
+        backend=sup_backend,
+        system_controller=fake_sys,
+        fast_supervisor=True,
+    )
+    power_res = await sup_orch.run("bloquea la pantalla", device_id="pc")
+    assert power_res.approved is True
+    assert len(sup_backend.calls) == 1
+    fake_sys.power_action.assert_called_once_with("lock")

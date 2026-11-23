@@ -18,6 +18,7 @@ from jarvis.config import settings
 from jarvis.tools.agenda import AgendaEvent, AgendaStore
 from jarvis.tools.app_control import AppController
 from jarvis.tools.memory import MemoryStore
+from jarvis.tools.system_control import SystemController
 from jarvis.tools.web_search import WebSearchTool
 from jarvis.voice.tts import LocalTTSEngine, TTSError
 
@@ -116,6 +117,7 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 _agenda_store: AgendaStore | None = None
 _app_controller: AppController | None = None
 _memory_store: MemoryStore | None = None
+_system_controller: SystemController | None = None
 _web_search: WebSearchTool | None = None
 _tts_engine: LocalTTSEngine | None = None
 
@@ -163,6 +165,13 @@ def get_web_search() -> WebSearchTool:
     return _web_search
 
 
+def get_system_controller() -> SystemController:
+    global _system_controller
+    if _system_controller is None:
+        _system_controller = SystemController()
+    return _system_controller
+
+
 def get_tts_engine() -> LocalTTSEngine:
     global _tts_engine
     if _tts_engine is None:
@@ -181,6 +190,7 @@ def get_orchestrator() -> DualAgentOrchestrator:
         agenda_store=get_agenda_store(),
         app_controller=get_app_controller(),
         memory_store=get_memory_store(),
+        system_controller=get_system_controller(),
         web_search=get_web_search(),
         fast_supervisor=settings.fast_supervisor,
     )

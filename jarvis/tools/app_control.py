@@ -186,13 +186,23 @@ def _scan_registry_app_paths() -> dict[str, list[str]]:
     return discovered
 
 
+def _resolve_powershell_exe() -> str:
+    """Resolve the absolute path to Windows PowerShell for pythonw.exe compatibility."""
+    system_root = os.environ.get("SystemRoot", r"C:\Windows")
+    candidate = Path(system_root) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+    if candidate.is_file():
+        return str(candidate)
+    return shutil.which("powershell") or "powershell"
+
+
 def _scan_start_apps(timeout: float = 30.0) -> dict[str, list[str]]:
     """Discover Microsoft Store / UWP and Start Apps via PowerShell Get-StartApps."""
     discovered: dict[str, list[str]] = {}
+    powershell_exe = _resolve_powershell_exe()
     try:
         result = subprocess.run(
             [
-                "powershell",
+                powershell_exe,
                 "-NoProfile",
                 "-Command",
                 "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Get-StartApps | ConvertTo-Json -Compress",

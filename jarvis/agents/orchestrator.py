@@ -9,6 +9,7 @@ from jarvis.config import settings
 from jarvis.tools.agenda import AgendaStore, parse_spanish_reminder
 from jarvis.tools.app_control import AppController, build_mobile_intent
 from jarvis.tools.memory import MemoryStore, MemoryTurn
+from jarvis.tools.system_control import SystemController
 from jarvis.tools.web_search import WebSearchTool
 
 MOBILE_DEVICE_IDS = {"s24", "s24_plus", "s24-plus", "mobile", "android", "phone", "galaxy-s24", "galaxy_s24"}
@@ -19,6 +20,10 @@ SAFE_FAST_TOOLS = {
     "app_launch",
     "memory_save",
     "memory_search",
+    "system_media",
+    "system_open_target",
+    "system_status",
+    "system_time",
     "web_search",
 }
 _JSON_FENCE_RE = re.compile(r"^```(?:json)?\s*(.*?)\s*```$", re.DOTALL | re.IGNORECASE)
@@ -45,6 +50,48 @@ _DIRECT_MEMORY_SAVE_RE = re.compile(
 _DIRECT_MEMORY_SEARCH_RE = re.compile(
     r"^(?:jarvis[,\s]+)?(?:qu[eé]\s+recuerdas(?:\s+de|\s+sobre)?|qu[eé]\s+sabes(?:\s+de|\s+sobre)?|qu[eé]\s+te\s+dije(?:\s+de|\s+sobre)?)\s+(.+?)[.!?\s]*$",
     re.IGNORECASE,
+)
+_DIRECT_SYSTEM_TIME_RE = re.compile(
+    r"^(?:jarvis[,\s]+)?(?:qu[eé]\s+hora\s+es|dime\s+la\s+hora|qu[eé]\s+d[ií]a\s+es(?:\s+hoy)?|qu[eé]\s+fecha\s+es(?:\s+hoy)?)[.!?\s]*$",
+    re.IGNORECASE,
+)
+_DIRECT_SYSTEM_STATUS_RE = re.compile(
+    r"^(?:jarvis[,\s]+)?(?:(?:dime\s+(?:la|el)\s+)?(?:bater[ií]a|estado\s+de\s+la\s+(?:laptop|pc|computadora)|estado\s+del\s+sistema|uso\s+de\s+cpu)|cu[aá]nta\s+ram(?:\s+.*)?)[.!?\s]*$",
+    re.IGNORECASE,
+)
+_DIRECT_MEDIA_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"^(?:jarvis[,\s]+)?(?:sube|subir|aumenta)\s+(?:el\s+)?volumen[.!?\s]*$", re.IGNORECASE), "volume_up"),
+    (re.compile(r"^(?:jarvis[,\s]+)?(?:baja|bajar|disminuye)\s+(?:el\s+)?volumen[.!?\s]*$", re.IGNORECASE), "volume_down"),
+    (re.compile(r"^(?:jarvis[,\s]+)?(?:silencia|silenciar|mute|quita\s+el\s+sonido)(?:\s+(?:el\s+)?(?:volumen|audio|sonido))?[.!?\s]*$", re.IGNORECASE), "mute"),
+    (re.compile(r"^(?:jarvis[,\s]+)?(?:pon\s+pausa|pausa|pausar|reproduce|reproducir|reanuda|reanudar)(?:\s+(?:la\s+)?(?:m[uú]sica|canci[oó]n))?[.!?\s]*$", re.IGNORECASE), "play_pause"),
+    (re.compile(r"^(?:jarvis[,\s]+)?(?:siguiente\s+canci[oó]n|siguiente\s+pista|cambia\s+de\s+canci[oó]n|next\s+track)[.!?\s]*$", re.IGNORECASE), "next_track"),
+    (re.compile(r"^(?:jarvis[,\s]+)?(?:canci[oó]n\s+anterior|pista\s+anterior|anterior\s+canci[oó]n|prev(?:ious)?\s+track)[.!?\s]*$", re.IGNORECASE), "prev_track"),
+)
+_DIRECT_POWER_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"^(?:jarvis[,\s]+)?(?:bloquea|bloquear)\s+(?:la\s+)?(?:pantalla|laptop|pc|computadora|sesi[oó]n)[.!?\s]*$", re.IGNORECASE), "lock"),
+    (re.compile(r"^(?:jarvis[,\s]+)?(?:suspende|suspender|duerme|dormir)\s+(?:la\s+)?(?:laptop|pc|computadora|equipo)[.!?\s]*$", re.IGNORECASE), "sleep"),
+)
+_SYSTEM_OPEN_TARGETS: frozenset[str] = frozenset(
+    {
+        "descargas",
+        "downloads",
+        "documentos",
+        "documents",
+        "escritorio",
+        "desktop",
+        "imagenes",
+        "imágenes",
+        "pictures",
+        "musica",
+        "música",
+        "music",
+        "videos",
+        "youtube",
+        "google",
+        "github",
+        "twitch",
+        "netflix",
+    }
 )
 _FACT_SEARCH_STOPWORDS = {
     "que",
@@ -148,6 +195,20 @@ def _route_direct_tool(user_input: str) -> dict[str, Any] | None:
     if _DIRECT_AGENDA_LIST_RE.match(text):
         return {"tool": "agenda_list"}
 
+    if _DIRECT_SYSTEM_TIME_RE.match(text):
+        return {"tool": "system_time"}
+
+    if _DIRECT_SYSTEM_STATUS_RE.match(text):
+        return {"tool": "system_status"}
+
+    for pattern, action in _DIRECT_MEDIA_PATTERNS:
+        if pattern.match(text):
+            return {"tool": "system_media", "action": action}
+
+    for pattern, action in _DIRECT_POWER_PATTERNS:
+        if pattern.match(text):
+            return {"tool": "system_power", "action": action}
+
     reminder = parse_spanish_reminder(text)
     if reminder is not None:
         return {
@@ -161,6 +222,9 @@ def _route_direct_tool(user_input: str) -> dict[str, Any] | None:
     if launch_match:
         app_name = launch_match.group(1).strip()
         if app_name:
+            lowered = app_name.lower()
+            if lowered in _SYSTEM_OPEN_TARGETS or lowered.startswith(("https://", "http://")):
+                return {"tool": "system_open_target", "target": app_name}
             return {"tool": "app_launch", "app_name": app_name}
 
     close_match = _DIRECT_APP_CLOSE_RE.match(text)
@@ -202,6 +266,7 @@ class DualAgentOrchestrator:
         agenda_store: AgendaStore | None = None,
         app_controller: AppController | None = None,
         memory_store: MemoryStore | None = None,
+        system_controller: SystemController | None = None,
         web_search: WebSearchTool | None = None,
         fast_supervisor: bool = False,
     ) -> None:
@@ -213,6 +278,7 @@ class DualAgentOrchestrator:
         self.agenda_store = agenda_store
         self.app_controller = app_controller or AppController()
         self.memory_store = memory_store
+        self.system_controller = system_controller or SystemController()
         self.web_search = web_search or WebSearchTool()
         self.fast_supervisor = fast_supervisor
 
@@ -505,6 +571,53 @@ class DualAgentOrchestrator:
                 summary = WebSearchTool.format_spoken_summary(query, results)
             return summary, {"tool": tool_name, "query": query, "results": results}
 
+        if tool_name == "system_time":
+            info = self.system_controller.get_time_info()
+            return info["formatted"], {"tool": tool_name, **info}
+
+        if tool_name == "system_status":
+            status = self.system_controller.get_system_status()
+            return status["formatted"], {"tool": tool_name, **status}
+
+        if tool_name == "system_media":
+            action = str(tool_call.get("action", "")).strip()
+            if not action:
+                return (
+                    "Falta la acción multimedia ('action').",
+                    {"tool": tool_name, "error": "Missing action"},
+                )
+            try:
+                msg = self.system_controller.media_action(action)
+                return msg, {"tool": tool_name, "action": action.lower()}
+            except ValueError as exc:
+                return f"No se pudo ejecutar la acción multimedia: {exc}", {"tool": tool_name, "error": str(exc)}
+
+        if tool_name == "system_open_target":
+            target = str(tool_call.get("target", "")).strip()
+            if not target:
+                return (
+                    "Falta el destino a abrir ('target').",
+                    {"tool": tool_name, "error": "Missing target"},
+                )
+            try:
+                msg = self.system_controller.open_target(target)
+                return msg, {"tool": tool_name, "target": target.lower()}
+            except (ValueError, OSError) as exc:
+                return f"No se pudo abrir '{target}': {exc}", {"tool": tool_name, "error": str(exc)}
+
+        if tool_name == "system_power":
+            action = str(tool_call.get("action", "")).strip()
+            if not action:
+                return (
+                    "Falta la acción de energía ('action').",
+                    {"tool": tool_name, "error": "Missing action"},
+                )
+            try:
+                msg = self.system_controller.power_action(action)
+                return msg, {"tool": tool_name, "action": action.lower()}
+            except (ValueError, OSError) as exc:
+                return f"No se pudo ejecutar la acción de energía: {exc}", {"tool": tool_name, "error": str(exc)}
+
         return (
             f"Herramienta desconocida: '{tool_name}'.",
             {"tool": tool_name, "error": "Unknown tool"},
@@ -564,6 +677,11 @@ class DualAgentOrchestrator:
                 '- {"tool": "app_close", "app_name": "..."}\n'
                 '- {"tool": "memory_save", "key": "...", "value": "..."}\n'
                 '- {"tool": "memory_search", "query": "..."}\n'
+                '- {"tool": "system_time"}\n'
+                '- {"tool": "system_status"}\n'
+                '- {"tool": "system_media", "action": "volume_up|volume_down|mute|play_pause|next_track|prev_track"}\n'
+                '- {"tool": "system_open_target", "target": "descargas|documentos|escritorio|youtube|google|github|..."}\n'
+                '- {"tool": "system_power", "action": "lock|sleep"}\n'
                 '- {"tool": "web_search", "query": "..."}\n'
                 "Si es una conversación o pregunta general, responde directamente en texto natural.\n\n"
                 f"{facts_block}"

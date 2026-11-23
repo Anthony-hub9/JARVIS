@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import os
 import socket
+import sys
 import threading
 import webbrowser
+from pathlib import Path
 from typing import Any
 
 import pystray
@@ -111,7 +114,23 @@ class JarvisTrayApp:
         self.icon.run()
 
 
+def _ensure_stdio(log_path: Path | None = None) -> None:
+    """Redirect missing stdout/stderr (e.g. under pythonw.exe) so uvicorn does not crash."""
+    if sys.stdout is not None and sys.stderr is not None:
+        return
+    target = log_path or Path("jarvis_tray.log")
+    try:
+        stream = open(target, "a", encoding="utf-8")
+    except OSError:
+        stream = open(os.devnull, "w", encoding="utf-8")
+    if sys.stdout is None:
+        sys.stdout = stream
+    if sys.stderr is None:
+        sys.stderr = stream
+
+
 def main() -> None:
+    _ensure_stdio()
     JarvisTrayApp().run()
 
 

@@ -28,3 +28,6 @@ token.json
 
 # Local knowledge graph (not versioned)
 graphify-out/
+
+# Logs
+*.log

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from PIL import Image
 
-from jarvis.clients.tray_app import JarvisTrayApp, create_tray_icon_image
+from jarvis.clients.tray_app import JarvisTrayApp, _ensure_stdio, create_tray_icon_image
 
 
 def test_create_tray_icon_image_returns_valid_rgba_image() -> None:
@@ -76,3 +77,26 @@ def test_tray_app_run_starts_server_and_runs_pystray_icon() -> None:
     mock_thread_cls.return_value.start.assert_called_once()
     mock_icon_cls.assert_called_once()
     mock_icon.run.assert_called_once()
+
+
+def test_ensure_stdio_replaces_none_streams(tmp_path: Path, monkeypatch) -> None:
+    import sys
+
+    log_file = tmp_path / "jarvis_tray.log"
+    monkeypatch.setattr(sys, "stdout", None)
+    monkeypatch.setattr(sys, "stderr", None)
+
+    _ensure_stdio(log_file)
+
+    try:
+        assert sys.stdout is not None
+        assert sys.stderr is not None
+        assert sys.stdout.writable()
+        assert sys.stderr.writable()
+        sys.stdout.write("hello\n")
+        sys.stdout.flush()
+    finally:
+        if sys.stdout is not None:
+            sys.stdout.close()
+
+    assert "hello" in log_file.read_text(encoding="utf-8")

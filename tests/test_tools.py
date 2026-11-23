@@ -168,7 +168,7 @@ def test_scan_start_apps_single_object_and_graceful_fallback() -> None:
         return_value=SimpleNamespace(returncode=0, stdout=single_json, stderr=""),
     ) as run_mock:
         discovered = _scan_start_apps()
-    assert run_mock.call_args.kwargs["timeout"] == 15.0
+    assert run_mock.call_args.kwargs["timeout"] == 30.0
     assert run_mock.call_args.kwargs["stdin"] == subprocess.DEVNULL
     assert run_mock.call_args.kwargs["creationflags"] == getattr(subprocess, "CREATE_NO_WINDOW", 0)
     assert discovered == {
@@ -373,3 +373,25 @@ def test_resolve_command_respects_custom_allowlist_and_path_entries() -> None:
     default_ctrl._discovered = {"notepad": [r"C:\Custom\notepad.exe"]}
     with patch("jarvis.tools.app_control.shutil.which", return_value=r"C:\Windows\System32\notepad.exe"):
         assert default_ctrl._resolve_command("notepad") == ["notepad.exe"]
+
+
+def test_calculadora_in_allowlist_and_lazy_uwp_retry() -> None:
+    no_disc = AppController(discover=False)
+    assert no_disc._resolve_command("calculadora") == ["calc.exe"]
+
+    with patch("jarvis.tools.app_control.discover_windows_apps", return_value={}):
+        ctrl = AppController(allowlist={}, discover=True)
+    assert ctrl._uwp_scanned is False
+
+    uwp_whatsapp = ["explorer.exe", r"shell:AppsFolder\5319275A.WhatsAppDesktop_cv1g1gvanyjgm!App"]
+    with (
+        patch("jarvis.tools.app_control.shutil.which", return_value=None),
+        patch(
+            "jarvis.tools.app_control._scan_start_apps",
+            return_value={"whatsapp": uwp_whatsapp},
+        ) as scan_mock,
+    ):
+        assert ctrl._resolve_command("whatsapp") == uwp_whatsapp
+        assert ctrl._uwp_scanned is True
+        assert ctrl._resolve_entry("nonexistent") is None
+    scan_mock.assert_called_once_with()

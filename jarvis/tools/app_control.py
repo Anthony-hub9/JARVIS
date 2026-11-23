@@ -16,6 +16,7 @@ from typing import Any
 WINDOWS_APP_ALLOWLIST: dict[str, list[str]] = {
     "notepad": ["notepad.exe"],
     "calc": ["calc.exe"],
+    "calculadora": ["calc.exe"],
     "chrome": ["chrome.exe"],
     "spotify": ["spotify.exe"],
     "discord": ["discord.exe"],
@@ -182,7 +183,7 @@ def _scan_registry_app_paths() -> dict[str, list[str]]:
     return discovered
 
 
-def _scan_start_apps(timeout: float = 15.0) -> dict[str, list[str]]:
+def _scan_start_apps(timeout: float = 30.0) -> dict[str, list[str]]:
     """Discover Microsoft Store / UWP and Start Apps via PowerShell Get-StartApps."""
     discovered: dict[str, list[str]] = {}
     try:
@@ -279,14 +280,36 @@ class AppController:
         discover: bool = True,
     ) -> None:
         self._is_custom_allowlist: bool = allowlist is not None
+        self._discover: bool = discover
         self.allowlist: dict[str, list[str]] = (
             dict(allowlist) if allowlist is not None else dict(WINDOWS_APP_ALLOWLIST)
         )
         self._discovered: dict[str, list[str]] = discover_windows_apps() if discover else {}
+        self._uwp_scanned: bool = self._has_uwp_entries(self._discovered)
+
+    @staticmethod
+    def _has_uwp_entries(discovered: dict[str, list[str]]) -> bool:
+        return any(
+            len(cmd) >= 2 and cmd[1].startswith("shell:AppsFolder\\")
+            for cmd in discovered.values()
+        )
+
+    def refresh_uwp_if_needed(self) -> bool:
+        """Retry UWP Start Apps scan once if initial discovery had no UWP entries."""
+        if not self._discover or self._uwp_scanned:
+            return False
+        uwp_apps = _scan_start_apps()
+        if not uwp_apps:
+            return False
+        for k, cmd in uwp_apps.items():
+            self._discovered.setdefault(k, cmd)
+        self._uwp_scanned = True
+        return True
 
     def refresh_discovered(self) -> dict[str, list[str]]:
         """Re-scan installed Windows applications."""
         self._discovered = discover_windows_apps()
+        self._uwp_scanned = self._has_uwp_entries(self._discovered)
         return dict(self._discovered)
 
     def list_available_apps(self) -> list[str]:
@@ -337,19 +360,20 @@ class AppController:
 
         return None
 
-    def _resolve_entry(self, key: str) -> tuple[str, list[str]] | None:
+    def _lookup_entry(self, key: str) -> tuple[str, list[str]] | None:
         if key in self.allowlist:
             return key, self._prefer_allowlist(key, self.allowlist[key])
         if key in self._discovered:
             return key, self._discovered[key]
         return self._fuzzy_match_entry(key)
 
-    def _resolve_command(self, app_name: str) -> list[str] | None:
-        raw = app_name.strip()
-        if not raw or not _SAFE_APP_NAME_RE.match(raw):
-            return None
+    def _resolve_entry(self, key: str) -> tuple[str, list[str]] | None:
+        entry = self._lookup_entry(key)
+        if entry is None and self.refresh_uwp_if_needed():
+            entry = self._lookup_entry(key)
+        return entry
 
-        key = _normalize_key(raw)
+    def _lookup_command(self, raw: str, key: str) -> list[str] | None:
         if key in self.allowlist:
             return self._prefer_allowlist(key, self.allowlist[key])
         if key in self._discovered:
@@ -363,6 +387,17 @@ class AppController:
         if fuzzy is not None:
             return fuzzy[1]
         return None
+
+    def _resolve_command(self, app_name: str) -> list[str] | None:
+        raw = app_name.strip()
+        if not raw or not _SAFE_APP_NAME_RE.match(raw):
+            return None
+
+        key = _normalize_key(raw)
+        cmd = self._lookup_command(raw, key)
+        if cmd is None and self.refresh_uwp_if_needed():
+            cmd = self._lookup_command(raw, key)
+        return cmd
 
     def launch_app(self, app_name: str) -> subprocess.Popen[bytes]:
         """Launch a known or dynamically discovered Windows app via subprocess.Popen."""

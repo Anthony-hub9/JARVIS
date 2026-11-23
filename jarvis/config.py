@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     memory_db_path: str = "jarvis_memory.db"
     google_calendar_credentials_path: str = "credentials.json"
     google_calendar_token_path: str = "token.json"
+    google_credentials_path: str = "credentials.json"
+    google_token_path: str = "token.json"
 
     hub_host: str = "0.0.0.0"
     hub_port: int = 8000

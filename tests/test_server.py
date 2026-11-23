@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
 from jarvis.agents.orchestrator import DualAgentOrchestrator, OrchestratorResult
-from jarvis.hub.server import ConnectionManager, app, check_and_dispatch_reminders
-from jarvis.tools.agenda import AgendaStore
+from jarvis.hub import server as hub_server
+from jarvis.hub.server import ConnectionManager, app, check_and_dispatch_reminders, get_agenda_store
+from jarvis.tools.agenda import AgendaStore, GoogleCalendarSync
 from jarvis.tools.app_control import AppController
 from jarvis.voice.tts import TTSError
 
@@ -330,5 +332,60 @@ async def test_check_and_dispatch_reminders_broadcasts_and_posts_ntfy() -> None:
     finally:
         conn_manager.disconnect(ws)
         store.close()
+
+
+def test_calendar_status_endpoint(tmp_path: Path) -> None:
+    creds = tmp_path / "credentials.json"
+    token = tmp_path / "token.json"
+
+    with (
+        patch.object(hub_server.settings, "google_credentials_path", str(creds)),
+        patch.object(hub_server.settings, "google_token_path", str(token)),
+    ):
+        client = TestClient(app)
+
+        resp_missing = client.get("/api/calendar/status")
+        assert resp_missing.status_code == 200
+        assert resp_missing.json() == {
+            "configured": False,
+            "authenticated": False,
+            "credentials_path": str(creds),
+            "token_path": str(token),
+        }
+
+        creds.write_text("{}", encoding="utf-8")
+        token.write_text("{}", encoding="utf-8")
+
+        resp_ready = client.get("/api/calendar/status")
+        assert resp_ready.status_code == 200
+        assert resp_ready.json() == {
+            "configured": True,
+            "authenticated": True,
+            "credentials_path": str(creds),
+            "token_path": str(token),
+        }
+
+
+def test_get_agenda_store_wires_google_calendar_sync(tmp_path: Path) -> None:
+    creds = tmp_path / "credentials.json"
+    token = tmp_path / "token.json"
+    prev_store = hub_server._agenda_store
+    hub_server._agenda_store = None
+    created_store: AgendaStore | None = None
+
+    try:
+        with (
+            patch.object(hub_server.settings, "agenda_db_path", ":memory:"),
+            patch.object(hub_server.settings, "google_credentials_path", str(creds)),
+            patch.object(hub_server.settings, "google_token_path", str(token)),
+        ):
+            created_store = get_agenda_store()
+            assert isinstance(created_store.calendar_sync, GoogleCalendarSync)
+            assert created_store.calendar_sync.credentials_path == creds
+            assert created_store.calendar_sync.token_path == token
+    finally:
+        if created_store is not None:
+            created_store.close()
+        hub_server._agenda_store = prev_store
 
 

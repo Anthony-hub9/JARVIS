@@ -22,5 +22,9 @@ build/
 *.sqlite
 *.sqlite3
 
+# Google OAuth secrets
+credentials.json
+token.json
+
 # Local knowledge graph (not versioned)
 graphify-out/

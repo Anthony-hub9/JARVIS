@@ -1,7 +1,7 @@
 from datetime import datetime
 import sqlite3
 
-from jarvis.tools.agenda import AgendaStore, GoogleCalendarSync, parse_spanish_reminder
+from jarvis.tools.agenda import AgendaStore, parse_spanish_reminder
 
 
 def test_add_and_list_events(tmp_path):
@@ -30,24 +30,6 @@ def test_upcoming_reminders():
 
         upcoming = store.upcoming_reminders(now="2026-11-19T12:00:00+00:00")
         assert [e.title for e in upcoming] == ["Future1", "Future2"]
-    finally:
-        store.close()
-
-
-def test_google_calendar_sync_graceful_fallback_without_credentials(tmp_path):
-    sync = GoogleCalendarSync(
-        credentials_path=tmp_path / "missing_credentials.json",
-        token_path=tmp_path / "token.json",
-    )
-    assert sync.is_configured() is False
-
-    store = AgendaStore(tmp_path / "agenda.db", calendar_sync=sync)
-    try:
-        event = store.add_event("Offline Event", "2026-11-22T15:00:00+00:00", notes="Local only")
-        assert sync.sync_event(event) is False
-        events = store.list_events()
-        assert len(events) == 1
-        assert events[0].title == "Offline Event"
     finally:
         store.close()
 

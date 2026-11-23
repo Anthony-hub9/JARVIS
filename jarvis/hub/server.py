@@ -15,7 +15,7 @@ from pydantic import BaseModel
 
 from jarvis.agents.orchestrator import DualAgentOrchestrator, OllamaBackend
 from jarvis.config import settings
-from jarvis.tools.agenda import AgendaEvent, AgendaStore, GoogleCalendarSync
+from jarvis.tools.agenda import AgendaEvent, AgendaStore
 from jarvis.tools.app_control import AppController
 from jarvis.tools.memory import MemoryStore
 from jarvis.tools.web_search import WebSearchTool
@@ -137,11 +137,7 @@ class AppActionRequest(BaseModel):
 def get_agenda_store() -> AgendaStore:
     global _agenda_store
     if _agenda_store is None:
-        calendar_sync = GoogleCalendarSync(
-            credentials_path=settings.google_credentials_path,
-            token_path=settings.google_token_path,
-        )
-        _agenda_store = AgendaStore(settings.agenda_db_path, calendar_sync=calendar_sync)
+        _agenda_store = AgendaStore(settings.agenda_db_path)
     return _agenda_store
 
 
@@ -280,18 +276,6 @@ async def create_agenda_event(payload: AgendaCreateRequest) -> JSONResponse:
             }
         },
     )
-
-
-@app.get("/api/calendar/status")
-async def calendar_status() -> dict[str, Any]:
-    credentials_path = Path(settings.google_credentials_path)
-    token_path = Path(settings.google_token_path)
-    return {
-        "configured": credentials_path.is_file(),
-        "authenticated": token_path.is_file(),
-        "credentials_path": str(settings.google_credentials_path),
-        "token_path": str(settings.google_token_path),
-    }
 
 
 @app.get("/api/apps")

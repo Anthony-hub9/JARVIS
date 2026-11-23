@@ -26,7 +26,8 @@ def test_tray_app_open_hud_opens_browser() -> None:
 
 
 def test_tray_app_quit_stops_server_and_icon() -> None:
-    tray = JarvisTrayApp()
+    mock_listener = MagicMock()
+    tray = JarvisTrayApp(voice_listener=mock_listener)
     mock_server = MagicMock()
     mock_server.should_exit = False
     mock_icon = MagicMock()
@@ -35,6 +36,7 @@ def test_tray_app_quit_stops_server_and_icon() -> None:
 
     tray.quit(mock_icon)
 
+    mock_listener.stop.assert_called_once_with()
     assert mock_server.should_exit is True
     mock_icon.stop.assert_called_once()
 
@@ -53,7 +55,9 @@ def test_tray_app_start_server_skips_when_port_open() -> None:
 
 
 def test_tray_app_run_starts_server_and_runs_pystray_icon() -> None:
-    tray = JarvisTrayApp(host="127.0.0.1", port=8000)
+    mock_listener = MagicMock()
+    mock_listener.voice_profile = "jarvis"
+    tray = JarvisTrayApp(host="127.0.0.1", port=8000, voice_listener=mock_listener)
     mock_server = MagicMock()
     mock_icon = MagicMock()
 
@@ -68,6 +72,7 @@ def test_tray_app_run_starts_server_and_runs_pystray_icon() -> None:
         tray.run()
 
     mock_ensure_ollama.assert_called_once_with()
+    mock_listener.start.assert_called_once_with()
 
     mock_config_cls.assert_called_once_with(
         "jarvis.hub.server:app",
@@ -79,6 +84,10 @@ def test_tray_app_run_starts_server_and_runs_pystray_icon() -> None:
     assert mock_thread_cls.call_args.kwargs["daemon"] is True
     mock_thread_cls.return_value.start.assert_called_once()
     mock_icon_cls.assert_called_once()
+    menu = mock_icon_cls.call_args.kwargs["menu"]
+    labels = [item.text for item in menu.items]
+    assert "Escucha continua (Jarvis)" in labels
+    assert "Voz: JARVIS / Albedo" in labels
     mock_icon.run.assert_called_once()
 
 
@@ -169,3 +178,28 @@ def test_tray_app_quit_terminates_ollama_proc_if_started() -> None:
     mock_proc.terminate.assert_called_once_with()
     assert tray.ollama_proc is None
     mock_icon.stop.assert_called_once_with()
+
+
+def test_tray_app_toggle_voice_listener() -> None:
+    mock_listener = MagicMock()
+    tray = JarvisTrayApp(voice_listener=mock_listener, voice_enabled=True)
+
+    tray.toggle_voice_listener()
+    assert tray.voice_enabled is False
+    mock_listener.stop.assert_called_once_with()
+
+    tray.toggle_voice_listener()
+    assert tray.voice_enabled is True
+    mock_listener.start.assert_called_once_with()
+
+
+def test_tray_app_toggle_voice_profile() -> None:
+    mock_listener = MagicMock()
+    mock_listener.voice_profile = "jarvis"
+    tray = JarvisTrayApp(voice_listener=mock_listener)
+
+    tray.toggle_voice_profile()
+    assert mock_listener.voice_profile == "albedo"
+
+    tray.toggle_voice_profile()
+    assert mock_listener.voice_profile == "jarvis"

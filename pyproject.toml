@@ -15,6 +15,10 @@ dependencies = [
     "pillow>=10.0.0",
     "psutil>=6.0.0",
     "pycaw>=20240210",
+    "SpeechRecognition>=3.10.0",
+    "sounddevice>=0.5.0",
+    "numpy>=2.0.0",
+    "pygame>=2.6.0",
 ]
 
 [project.optional-dependencies]

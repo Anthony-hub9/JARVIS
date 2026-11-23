@@ -15,6 +15,7 @@ import uvicorn
 from PIL import Image, ImageDraw
 
 from jarvis.config import settings
+from jarvis.voice.listener import BackgroundVoiceListener
 
 
 def create_tray_icon_image(size: int = 64) -> Image.Image:
@@ -60,13 +61,21 @@ def _is_port_open(host: str, port: int, timeout: float = 0.5) -> bool:
 class JarvisTrayApp:
     """Background system tray controller for the JARVIS Hub server."""
 
-    def __init__(self, host: str | None = None, port: int | None = None) -> None:
+    def __init__(
+        self,
+        host: str | None = None,
+        port: int | None = None,
+        voice_listener: BackgroundVoiceListener | None = None,
+        voice_enabled: bool = True,
+    ) -> None:
         self.host = host or settings.hub_host
         self.port = port if port is not None else settings.hub_port
         self.server: uvicorn.Server | None = None
         self.server_thread: threading.Thread | None = None
         self.ollama_proc: subprocess.Popen[Any] | None = None
         self.icon: pystray.Icon | None = None
+        self.voice_listener = voice_listener or BackgroundVoiceListener()
+        self.voice_enabled = voice_enabled
 
     @property
     def hud_url(self) -> str:
@@ -110,7 +119,20 @@ class JarvisTrayApp:
     def open_hud(self, _icon: Any = None, _item: Any = None) -> None:
         webbrowser.open(self.hud_url)
 
+    def toggle_voice_listener(self, _icon: Any = None, _item: Any = None) -> None:
+        if self.voice_enabled:
+            self.voice_listener.stop()
+            self.voice_enabled = False
+        else:
+            self.voice_listener.start()
+            self.voice_enabled = True
+
+    def toggle_voice_profile(self, _icon: Any = None, _item: Any = None) -> None:
+        current = getattr(self.voice_listener, "voice_profile", "jarvis")
+        self.voice_listener.voice_profile = "albedo" if current == "jarvis" else "jarvis"
+
     def quit(self, icon: Any = None, _item: Any = None) -> None:
+        self.voice_listener.stop()
         if self.server is not None:
             self.server.should_exit = True
         if self.ollama_proc is not None:
@@ -126,8 +148,20 @@ class JarvisTrayApp:
     def run(self) -> None:
         self.ensure_ollama_running()
         self.start_server()
+        if self.voice_enabled:
+            self.voice_listener.start()
         menu = pystray.Menu(
             pystray.MenuItem("Abrir HUD JARVIS", self.open_hud, default=True),
+            pystray.MenuItem(
+                "Escucha continua (Jarvis)",
+                self.toggle_voice_listener,
+                checked=lambda _: self.voice_enabled,
+            ),
+            pystray.MenuItem(
+                "Voz: JARVIS / Albedo",
+                self.toggle_voice_profile,
+                checked=lambda _: self.voice_listener.voice_profile == "albedo",
+            ),
             pystray.MenuItem("Salir", self.quit),
         )
         self.icon = pystray.Icon(

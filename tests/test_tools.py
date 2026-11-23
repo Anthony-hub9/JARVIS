@@ -18,6 +18,13 @@ from jarvis.tools.app_control import (
     build_mobile_intent,
 )
 
+_POPEN_KWARGS = {
+    "stdin": subprocess.DEVNULL,
+    "stdout": subprocess.DEVNULL,
+    "stderr": subprocess.DEVNULL,
+    "creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0),
+}
+
 
 def test_app_controller_accepts_allowlisted_app() -> None:
     controller = AppController(discover=False)
@@ -27,7 +34,7 @@ def test_app_controller_accepts_allowlisted_app() -> None:
         proc = controller.launch_app("notepad")
 
     assert proc is fake_proc
-    popen_mock.assert_called_once_with(["notepad.exe"])
+    popen_mock.assert_called_once_with(["notepad.exe"], **_POPEN_KWARGS)
 
 
 def test_app_controller_rejects_unknown_app() -> None:
@@ -46,14 +53,14 @@ def test_dynamic_discovery_start_menu_and_which(tmp_path: Path) -> None:
 
     discovered = _scan_start_menu_shortcuts([tmp_path])
     assert "vlc media player" in discovered
-    assert discovered["vlc media player"] == ["cmd", "/c", "start", "", str(lnk_file)]
+    assert discovered["vlc media player"] == ["explorer.exe", str(lnk_file)]
 
     controller = AppController(allowlist={}, discover=False)
     with patch("jarvis.tools.app_control.shutil.which", return_value=r"C:\Tools\ffmpeg.exe"):
         with patch("jarvis.tools.app_control.subprocess.Popen", return_value=MagicMock()) as popen_mock:
             controller.launch_app("ffmpeg")
 
-    popen_mock.assert_called_once_with([r"C:\Tools\ffmpeg.exe"])
+    popen_mock.assert_called_once_with([r"C:\Tools\ffmpeg.exe"], **_POPEN_KWARGS)
 
 
 def test_app_controller_close_app_calls_taskkill() -> None:
@@ -144,7 +151,8 @@ def test_uwp_start_apps_discovery_and_launch() -> None:
 
     assert proc is fake_proc
     popen_mock.assert_called_once_with(
-        ["explorer.exe", r"shell:AppsFolder\5319275A.WhatsAppDesktop_cv1g1gvanyjgm!App"]
+        ["explorer.exe", r"shell:AppsFolder\5319275A.WhatsAppDesktop_cv1g1gvanyjgm!App"],
+        **_POPEN_KWARGS,
     )
 
 
@@ -203,7 +211,7 @@ def test_close_app_uwp_fallback_to_running_root_process() -> None:
 def test_fuzzy_resolve_riot_to_riot_client() -> None:
     controller = AppController(allowlist={}, discover=False)
     controller._discovered = {
-        "riot client": ["cmd", "/c", "start", "", r"C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Riot Client.lnk"],
+        "riot client": ["explorer.exe", r"C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Riot Client.lnk"],
         "riot client helper": [r"C:\Riot Games\Riot Client\RiotClientHelper.exe"],
     }
 
@@ -213,7 +221,7 @@ def test_fuzzy_resolve_riot_to_riot_client() -> None:
             proc = controller.launch_app("riot")
 
     assert proc is fake_proc
-    popen_mock.assert_called_once_with(controller._discovered["riot client"])
+    popen_mock.assert_called_once_with(controller._discovered["riot client"], **_POPEN_KWARGS)
 
 
 def test_fuzzy_resolve_filler_words_el_cliente_de_riot() -> None:
@@ -228,7 +236,7 @@ def test_fuzzy_resolve_filler_words_el_cliente_de_riot() -> None:
             proc = controller.launch_app("el cliente de riot")
 
     assert proc is fake_proc
-    popen_mock.assert_called_once_with(controller._discovered["cliente de riot"])
+    popen_mock.assert_called_once_with(controller._discovered["cliente de riot"], **_POPEN_KWARGS)
 
 
 def test_fuzzy_resolve_unknown_app_raises_value_error() -> None:
@@ -327,7 +335,7 @@ def test_close_app_tasklist_v_window_title_match() -> None:
 
 def test_resolve_command_prefers_discovered_over_bare_default_allowlist() -> None:
     controller = AppController(discover=False)
-    steam_lnk = ["cmd", "/c", "start", "", r"C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Steam\Steam.lnk"]
+    steam_lnk = ["explorer.exe", r"C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Steam\Steam.lnk"]
     chrome_exe = [r"C:\Program Files\Google\Chrome\Application\chrome.exe"]
     controller._discovered = {
         "steam": steam_lnk,
@@ -342,7 +350,7 @@ def test_resolve_command_prefers_discovered_over_bare_default_allowlist() -> Non
             proc = controller.launch_app("steam")
 
     assert proc is fake_proc
-    popen_mock.assert_called_once_with(steam_lnk)
+    popen_mock.assert_called_once_with(steam_lnk, **_POPEN_KWARGS)
 
 
 def test_resolve_command_respects_custom_allowlist_and_path_entries() -> None:

@@ -1,3 +1,4 @@
+import subprocess
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -138,7 +139,13 @@ async def test_orchestrator_launches_app_on_pc_and_builds_intent_on_s24() -> Non
     with patch("jarvis.tools.app_control.subprocess.Popen", return_value=MagicMock()) as popen_mock:
         pc_res = await orch.run("Abre el bloc de notas", device_id="pc")
 
-    popen_mock.assert_called_once_with(["notepad.exe"])
+    popen_mock.assert_called_once_with(
+        ["notepad.exe"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
     assert pc_res.approved is True
     assert pc_res.tool_result == {"tool": "app_launch", "app_name": "notepad", "device": "pc"}
 

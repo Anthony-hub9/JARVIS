@@ -127,7 +127,7 @@ def _scan_start_menu_shortcuts(dirs: list[Path]) -> dict[str, list[str]]:
         for lnk in base.rglob("*.lnk"):
             key = _normalize_key(lnk.stem)
             if key and key not in discovered:
-                discovered[key] = ["cmd", "/c", "start", "", str(lnk)]
+                discovered[key] = ["explorer.exe", str(lnk)]
     return discovered
 
 
@@ -367,7 +367,13 @@ class AppController:
         cmd = self._resolve_command(app_name)
         if cmd is None:
             raise ValueError(f"Application '{app_name}' not found or not in the allowlist.")
-        return subprocess.Popen(cmd)
+        return subprocess.Popen(
+            cmd,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
 
     def _resolve_process_name(self, app_name: str) -> str:
         raw = app_name.strip()

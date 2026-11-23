@@ -24,7 +24,13 @@ async def test_ollama_backend_generate():
     assert backend.timeout == 180.0
     mock_client.post.assert_awaited_once_with(
         "http://localhost:11434/api/generate",
-        json={"model": "qwen2.5:7b", "prompt": "Hola", "stream": False, "keep_alive": "15m"},
+        json={
+            "model": "qwen2.5:7b",
+            "prompt": "Hola",
+            "stream": False,
+            "keep_alive": "15m",
+            "options": {"num_predict": 140, "num_ctx": 2048},
+        },
     )
 
 
@@ -51,6 +57,7 @@ async def test_ollama_backend_generate_with_images():
             "prompt": "Analiza el frame",
             "stream": False,
             "keep_alive": "15m",
+            "options": {"num_predict": 140, "num_ctx": 2048},
             "images": ["ZmFrZQ=="],
         },
     )

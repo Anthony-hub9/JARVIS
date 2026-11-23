@@ -96,6 +96,7 @@ class OllamaBackend:
             "prompt": prompt,
             "stream": False,
             "keep_alive": "15m",
+            "options": {"num_predict": 140, "num_ctx": 2048},
         }
         if images:
             payload["images"] = images

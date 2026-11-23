@@ -59,12 +59,15 @@ def test_tray_app_run_starts_server_and_runs_pystray_icon() -> None:
 
     with (
         patch("jarvis.clients.tray_app._is_port_open", return_value=False),
+        patch.object(tray, "ensure_ollama_running", return_value=False) as mock_ensure_ollama,
         patch("jarvis.clients.tray_app.uvicorn.Config") as mock_config_cls,
         patch("jarvis.clients.tray_app.uvicorn.Server", return_value=mock_server),
         patch("jarvis.clients.tray_app.threading.Thread") as mock_thread_cls,
         patch("jarvis.clients.tray_app.pystray.Icon", return_value=mock_icon) as mock_icon_cls,
     ):
         tray.run()
+
+    mock_ensure_ollama.assert_called_once_with()
 
     mock_config_cls.assert_called_once_with(
         "jarvis.hub.server:app",
@@ -100,3 +103,69 @@ def test_ensure_stdio_replaces_none_streams(tmp_path: Path, monkeypatch) -> None
             sys.stdout.close()
 
     assert "hello" in log_file.read_text(encoding="utf-8")
+
+
+def test_ensure_ollama_running_skips_when_port_open() -> None:
+    tray = JarvisTrayApp()
+    with (
+        patch("jarvis.clients.tray_app._is_port_open", return_value=True) as mock_port,
+        patch("jarvis.clients.tray_app.shutil.which") as mock_which,
+        patch("jarvis.clients.tray_app.subprocess.Popen") as mock_popen,
+    ):
+        started = tray.ensure_ollama_running()
+
+    assert started is False
+    assert tray.ollama_proc is None
+    mock_port.assert_called_once_with("127.0.0.1", 11434)
+    mock_which.assert_not_called()
+    mock_popen.assert_not_called()
+
+
+def test_ensure_ollama_running_returns_false_when_missing_executable() -> None:
+    tray = JarvisTrayApp()
+    with (
+        patch("jarvis.clients.tray_app._is_port_open", return_value=False),
+        patch("jarvis.clients.tray_app.shutil.which", return_value=None),
+        patch("jarvis.clients.tray_app.subprocess.Popen") as mock_popen,
+    ):
+        started = tray.ensure_ollama_running()
+
+    assert started is False
+    assert tray.ollama_proc is None
+    mock_popen.assert_not_called()
+
+
+def test_ensure_ollama_running_spawns_when_port_closed_and_exe_found() -> None:
+    import subprocess
+
+    tray = JarvisTrayApp()
+    mock_proc = MagicMock()
+    with (
+        patch("jarvis.clients.tray_app._is_port_open", return_value=False),
+        patch("jarvis.clients.tray_app.shutil.which", return_value=r"C:\Ollama\ollama.exe"),
+        patch("jarvis.clients.tray_app.subprocess.Popen", return_value=mock_proc) as mock_popen,
+    ):
+        started = tray.ensure_ollama_running()
+
+    assert started is True
+    assert tray.ollama_proc is mock_proc
+    mock_popen.assert_called_once_with(
+        [r"C:\Ollama\ollama.exe", "serve"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+
+
+def test_tray_app_quit_terminates_ollama_proc_if_started() -> None:
+    tray = JarvisTrayApp()
+    mock_proc = MagicMock()
+    mock_icon = MagicMock()
+    tray.ollama_proc = mock_proc
+    tray.icon = mock_icon
+
+    tray.quit(mock_icon)
+
+    mock_proc.terminate.assert_called_once_with()
+    assert tray.ollama_proc is None
+    mock_icon.stop.assert_called_once_with()

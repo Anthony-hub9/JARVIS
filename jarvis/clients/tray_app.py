@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+import shutil
 import socket
+import subprocess
 import sys
 import threading
 import webbrowser
@@ -63,11 +65,27 @@ class JarvisTrayApp:
         self.port = port if port is not None else settings.hub_port
         self.server: uvicorn.Server | None = None
         self.server_thread: threading.Thread | None = None
+        self.ollama_proc: subprocess.Popen[Any] | None = None
         self.icon: pystray.Icon | None = None
 
     @property
     def hud_url(self) -> str:
         return f"http://localhost:{self.port}/"
+
+    def ensure_ollama_running(self, ollama_port: int = 11434) -> bool:
+        """Start `ollama serve` in the background if the Ollama port is not open."""
+        if _is_port_open("127.0.0.1", ollama_port):
+            return False
+        ollama_exe = shutil.which("ollama")
+        if not ollama_exe:
+            return False
+        self.ollama_proc = subprocess.Popen(
+            [ollama_exe, "serve"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        return True
 
     def start_server(self) -> bool:
         """Start uvicorn in a daemon thread unless the port is already open."""
@@ -95,11 +113,18 @@ class JarvisTrayApp:
     def quit(self, icon: Any = None, _item: Any = None) -> None:
         if self.server is not None:
             self.server.should_exit = True
+        if self.ollama_proc is not None:
+            try:
+                self.ollama_proc.terminate()
+            except OSError:
+                pass
+            self.ollama_proc = None
         target_icon = icon if icon is not None else self.icon
         if target_icon is not None:
             target_icon.stop()
 
     def run(self) -> None:
+        self.ensure_ollama_running()
         self.start_server()
         menu = pystray.Menu(
             pystray.MenuItem("Abrir HUD JARVIS", self.open_hud, default=True),

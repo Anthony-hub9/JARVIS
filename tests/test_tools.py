@@ -24,6 +24,10 @@ _POPEN_KWARGS = {
     "stderr": subprocess.DEVNULL,
     "creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0),
 }
+_SUBPROCESS_NO_WINDOW_KWARGS = {
+    "stdin": subprocess.DEVNULL,
+    "creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0),
+}
 
 
 def test_app_controller_accepts_allowlisted_app() -> None:
@@ -74,6 +78,7 @@ def test_app_controller_close_app_calls_taskkill() -> None:
         ["taskkill", "/IM", "notepad.exe", "/F"],
         capture_output=True,
         text=True,
+        **_SUBPROCESS_NO_WINDOW_KWARGS,
         check=False,
     )
     assert res["process"] == "notepad.exe"
@@ -161,8 +166,11 @@ def test_scan_start_apps_single_object_and_graceful_fallback() -> None:
     with patch(
         "jarvis.tools.app_control.subprocess.run",
         return_value=SimpleNamespace(returncode=0, stdout=single_json, stderr=""),
-    ):
+    ) as run_mock:
         discovered = _scan_start_apps()
+    assert run_mock.call_args.kwargs["timeout"] == 15.0
+    assert run_mock.call_args.kwargs["stdin"] == subprocess.DEVNULL
+    assert run_mock.call_args.kwargs["creationflags"] == getattr(subprocess, "CREATE_NO_WINDOW", 0)
     assert discovered == {
         "calculadora": ["explorer.exe", r"shell:AppsFolder\Microsoft.WindowsCalculator_8wekyb3d8bbwe!App"]
     }
@@ -301,6 +309,7 @@ def test_close_app_calculadora_resolves_process_alias() -> None:
         ["taskkill", "/IM", "calculatorapp.exe", "/F"],
         capture_output=True,
         text=True,
+        **_SUBPROCESS_NO_WINDOW_KWARGS,
         check=False,
     )
     assert res["process"] == "calculatorapp.exe"
@@ -327,6 +336,7 @@ def test_close_app_tasklist_v_window_title_match() -> None:
         text=True,
         encoding="utf-8",
         errors="replace",
+        **_SUBPROCESS_NO_WINDOW_KWARGS,
         timeout=5,
         check=False,
     )

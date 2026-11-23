@@ -182,7 +182,7 @@ def _scan_registry_app_paths() -> dict[str, list[str]]:
     return discovered
 
 
-def _scan_start_apps(timeout: float = 5.0) -> dict[str, list[str]]:
+def _scan_start_apps(timeout: float = 15.0) -> dict[str, list[str]]:
     """Discover Microsoft Store / UWP and Start Apps via PowerShell Get-StartApps."""
     discovered: dict[str, list[str]] = {}
     try:
@@ -197,6 +197,8 @@ def _scan_start_apps(timeout: float = 5.0) -> dict[str, list[str]]:
             text=True,
             encoding="utf-8",
             errors="replace",
+            stdin=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             timeout=timeout,
             check=False,
         )
@@ -416,6 +418,8 @@ class AppController:
                 text=True,
                 encoding="utf-8",
                 errors="replace",
+                stdin=subprocess.DEVNULL,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                 timeout=5,
                 check=False,
             )
@@ -459,10 +463,13 @@ class AppController:
     def close_app(self, app_name: str) -> dict[str, Any]:
         """Safely terminate a non-system Windows process via taskkill."""
         proc_name = self._resolve_process_name(app_name)
+        no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         result = subprocess.run(
             ["taskkill", "/IM", proc_name, "/F"],
             capture_output=True,
             text=True,
+            stdin=subprocess.DEVNULL,
+            creationflags=no_window,
             check=False,
         )
         if result.returncode != 0:
@@ -476,6 +483,8 @@ class AppController:
                     ["taskkill", "/IM", proc_name, "/F"],
                     capture_output=True,
                     text=True,
+                    stdin=subprocess.DEVNULL,
+                    creationflags=no_window,
                     check=False,
                 )
         return {

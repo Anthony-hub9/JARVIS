@@ -66,7 +66,31 @@ _POWER_COMMANDS: dict[str, tuple[list[str], str]] = {
     "sleep": (["rundll32.exe", "powrprof.dll,SetSuspendState", "0,1,0"], "Suspendiendo el equipo."),
 }
 
+_SKIP_DIR_NAMES: frozenset[str] = frozenset(
+    {
+        "windows",
+        "program files",
+        "program files (x86)",
+        "node_modules",
+        ".venv",
+    }
+)
+
 _KEYEVENTF_KEYUP = 0x0002
+
+
+def _get_endpoint_volume() -> Any:
+    """Return the Windows IAudioEndpointVolume pointer via pycaw."""
+    from comtypes import CLSCTX_ALL
+    from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+
+    speakers = AudioUtilities.GetSpeakers()
+    if speakers is None:
+        raise RuntimeError("No audio output device found.")
+    if hasattr(speakers, "EndpointVolume"):
+        return speakers.EndpointVolume
+    interface = speakers.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+    return ctypes.cast(interface, ctypes.POINTER(IAudioEndpointVolume))
 
 
 def _subprocess_no_window_kwargs() -> dict[str, Any]:
@@ -171,11 +195,61 @@ class SystemController:
             "formatted": formatted,
         }
 
+    def set_volume(self, level: int) -> str:
+        """Set Windows master volume to an exact percentage (0..100) using pycaw."""
+        clamped = max(0, min(100, int(level)))
+        if sys.platform != "win32":
+            return "Control de volumen exacto no soportado en esta plataforma."
+        try:
+            import comtypes
+        except ImportError:
+            return "No se pudo ajustar el volumen: falta la dependencia comtypes/pycaw."
+
+        comtypes.CoInitialize()
+        try:
+            volume = _get_endpoint_volume()
+            volume.SetMasterVolumeLevelScalar(clamped / 100.0, None)
+        except Exception as exc:
+            logger.warning("Failed to set volume via pycaw: %s", exc)
+            return f"No se pudo ajustar el volumen: {exc}"
+        finally:
+            comtypes.CoUninitialize()
+
+        return f"Volumen ajustado al {clamped}%."
+
+    def _step_volume_pycaw(self, delta: int) -> str | None:
+        """Step master volume by delta percentage points via pycaw, or return None on fallback."""
+        if sys.platform != "win32":
+            return None
+        try:
+            import comtypes
+        except ImportError:
+            return None
+
+        comtypes.CoInitialize()
+        try:
+            volume = _get_endpoint_volume()
+            current = round(float(volume.GetMasterVolumeLevelScalar()) * 100)
+            target = max(0, min(100, current + delta))
+            volume.SetMasterVolumeLevelScalar(target / 100.0, None)
+            return f"Volumen ajustado al {target}%."
+        except Exception as exc:
+            logger.debug("pycaw step volume fallback to keybd_event: %s", exc)
+            return None
+        finally:
+            comtypes.CoUninitialize()
+
     def media_action(self, action: str) -> str:
-        """Send a Windows media/volume virtual-key event."""
+        """Send a Windows media/volume action (pycaw 10% step for volume, keybd_event fallback)."""
         norm = action.strip().lower()
         if norm not in _MEDIA_VK_CODES:
             raise ValueError(f"Unknown media action: '{action}'")
+
+        if norm in ("volume_up", "volume_down"):
+            delta = 10 if norm == "volume_up" else -10
+            stepped = self._step_volume_pycaw(delta)
+            if stepped is not None:
+                return stepped
 
         vk_code, message = _MEDIA_VK_CODES[norm]
         if sys.platform != "win32" or not hasattr(ctypes, "windll"):
@@ -186,8 +260,77 @@ class SystemController:
         user32.keybd_event(vk_code, 0, _KEYEVENTF_KEYUP, 0)
         return message
 
-    def open_target(self, target: str) -> str:
-        """Open a standard user folder in Explorer or a quick web URL in the browser."""
+    def _default_folder_roots(self) -> list[Path]:
+        home = Path.home()
+        roots = [
+            home / "Desktop",
+            home / "Documents",
+            home / "Downloads",
+            home,
+        ]
+        for drive in ("D:\\", "C:\\"):
+            drive_path = Path(drive)
+            if drive_path.exists() and drive_path.is_dir():
+                roots.append(drive_path)
+        return roots
+
+    def _iter_subfolders(self, parent: Path) -> list[Path]:
+        try:
+            entries = list(parent.iterdir())
+        except OSError:
+            return []
+        result: list[Path] = []
+        for entry in entries:
+            name = entry.name
+            if name.startswith(".") or name.startswith("$"):
+                continue
+            if name.lower() in _SKIP_DIR_NAMES:
+                continue
+            try:
+                if entry.is_dir():
+                    result.append(entry)
+            except OSError:
+                continue
+        return result
+
+    def _find_folder(self, name: str, search_roots: list[Path] | None = None) -> Path | None:
+        """Find a folder by direct path or top-2-level search across standard roots."""
+        direct = Path(name).expanduser()
+        try:
+            if direct.is_dir():
+                return direct
+        except OSError:
+            pass
+
+        target_lower = name.strip().lower()
+        if not target_lower:
+            return None
+
+        roots = search_roots if search_roots is not None else self._default_folder_roots()
+        first_substring: Path | None = None
+
+        for root in roots:
+            if not root.exists() or not root.is_dir():
+                continue
+            level1 = self._iter_subfolders(root)
+            for d1 in level1:
+                d1_lower = d1.name.lower()
+                if d1_lower == target_lower:
+                    return d1
+                if first_substring is None and target_lower in d1_lower:
+                    first_substring = d1
+
+                for d2 in self._iter_subfolders(d1):
+                    d2_lower = d2.name.lower()
+                    if d2_lower == target_lower:
+                        return d2
+                    if first_substring is None and target_lower in d2_lower:
+                        first_substring = d2
+
+        return first_substring
+
+    def open_target(self, target: str, kind: str | None = None) -> str:
+        """Open a user/searched folder in Explorer or a quick web URL in the browser."""
         cleaned = target.strip()
         norm = cleaned.lower()
 
@@ -196,14 +339,22 @@ class SystemController:
             subprocess.Popen(["explorer.exe", str(folder_path)], **_subprocess_no_window_kwargs())
             return f"Abriendo carpeta '{norm}'."
 
-        if norm in _QUICK_WEB_URLS:
-            url = _QUICK_WEB_URLS[norm]
-            webbrowser.open(url)
-            return f"Abriendo {norm} en el navegador."
+        if kind != "folder":
+            if norm in _QUICK_WEB_URLS:
+                url = _QUICK_WEB_URLS[norm]
+                webbrowser.open(url)
+                return f"Abriendo {norm} en el navegador."
 
-        if norm.startswith(("https://", "http://")):
-            webbrowser.open(cleaned)
-            return f"Abriendo {cleaned} en el navegador."
+            if norm.startswith(("https://", "http://")):
+                webbrowser.open(cleaned)
+                return f"Abriendo {cleaned} en el navegador."
+
+        if kind == "folder":
+            found = self._find_folder(cleaned)
+            if found is not None:
+                subprocess.Popen(["explorer.exe", str(found)], **_subprocess_no_window_kwargs())
+                return f"Abriendo carpeta '{found.name}' ({found})."
+            raise ValueError(f"No encontré la carpeta '{cleaned}'.")
 
         raise ValueError(f"Unknown target: '{target}'")
 

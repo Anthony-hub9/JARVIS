@@ -1,4 +1,5 @@
 import subprocess
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -745,3 +746,73 @@ async def test_fast_command_router_routes_system_tools() -> None:
     assert power_res.approved is True
     assert len(sup_backend.calls) == 1
     fake_sys.power_action.assert_called_once_with("lock")
+
+
+@pytest.mark.asyncio
+async def test_fast_command_router_exact_volume_and_dynamic_folder(tmp_path: Path) -> None:
+    from jarvis.agents.orchestrator import _route_direct_tool
+    from jarvis.tools.system_control import SystemController
+
+    assert _route_direct_tool("sube el volumen a 10") == {
+        "tool": "system_media",
+        "action": "set_volume",
+        "level": 10,
+    }
+    assert _route_direct_tool("pon el volumen en 50%") == {
+        "tool": "system_media",
+        "action": "set_volume",
+        "level": 50,
+    }
+    assert _route_direct_tool("volumen al 30") == {
+        "tool": "system_media",
+        "action": "set_volume",
+        "level": 30,
+    }
+    assert _route_direct_tool("baja el volumen a 20") == {
+        "tool": "system_media",
+        "action": "set_volume",
+        "level": 20,
+    }
+    assert _route_direct_tool("abre la carpeta de TT") == {
+        "tool": "system_open_target",
+        "target": "TT",
+        "kind": "folder",
+    }
+
+    fake_sys = MagicMock()
+    fake_sys.set_volume.return_value = "Volumen ajustado al 10%."
+    backend = MockBackend([])
+    orch = DualAgentOrchestrator(backend=backend, system_controller=fake_sys, fast_supervisor=True)
+
+    vol_res = await orch.run("sube el volumen a 10", device_id="pc")
+    assert vol_res.approved is True
+    assert vol_res.response == "Volumen ajustado al 10%."
+    fake_sys.set_volume.assert_called_once_with(10)
+    assert backend.calls == []
+
+    # Real SystemController with tmp_path folder and mocked app_launcher to ensure no app_launch fallback
+    tt_dir = tmp_path / "TT"
+    tt_dir.mkdir()
+    real_sys = SystemController()
+    fake_launcher = MagicMock()
+    folder_orch = DualAgentOrchestrator(
+        backend=backend,
+        app_controller=fake_launcher,
+        system_controller=real_sys,
+        fast_supervisor=True,
+    )
+
+    with (
+        patch.object(real_sys, "_default_folder_roots", return_value=[tmp_path]),
+        patch("jarvis.tools.system_control.subprocess.Popen") as popen_mock,
+    ):
+        found_res = await folder_orch.run("abre la carpeta de TT", device_id="pc")
+        missing_res = await folder_orch.run("abre la carpeta de NoExisteXYZ", device_id="pc")
+
+    assert found_res.approved is True
+    assert "TT" in found_res.response
+    popen_mock.assert_called_once()
+    assert missing_res.approved is True
+    assert "No encontré la carpeta 'NoExisteXYZ'" in missing_res.response
+    assert [c for c in fake_launcher.mock_calls if c[0] != "__bool__"] == []
+    assert backend.calls == []

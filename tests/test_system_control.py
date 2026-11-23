@@ -93,6 +93,7 @@ def test_media_action_sends_windows_keybd_event(action: str, expected_vk: int) -
     with (
         patch.object(sc_mod.sys, "platform", "win32"),
         patch.object(sc_mod, "ctypes", fake_ctypes),
+        patch.object(ctrl, "_step_volume_pycaw", return_value=None),
     ):
         msg = ctrl.media_action(action)
 
@@ -164,3 +165,87 @@ def test_power_action_lock_and_sleep() -> None:
 
     with patch.object(sc_mod.sys, "platform", "linux"):
         assert "no soportada" in ctrl.power_action("lock")
+
+
+def test_set_volume_uses_pycaw_and_clamps() -> None:
+    ctrl = SystemController()
+    fake_endpoint = MagicMock()
+
+    with (
+        patch.object(sc_mod.sys, "platform", "win32"),
+        patch.object(sc_mod, "_get_endpoint_volume", return_value=fake_endpoint),
+        patch("comtypes.CoInitialize") as co_init,
+        patch("comtypes.CoUninitialize") as co_uninit,
+    ):
+        msg_10 = ctrl.set_volume(10)
+        msg_high = ctrl.set_volume(150)
+        msg_low = ctrl.set_volume(-5)
+
+    assert msg_10 == "Volumen ajustado al 10%."
+    assert msg_high == "Volumen ajustado al 100%."
+    assert msg_low == "Volumen ajustado al 0%."
+    assert fake_endpoint.SetMasterVolumeLevelScalar.call_args_list == [
+        call(0.1, None),
+        call(1.0, None),
+        call(0.0, None),
+    ]
+    assert co_init.call_count == 3
+    assert co_uninit.call_count == 3
+
+    with patch.object(sc_mod.sys, "platform", "linux"):
+        assert "no soportado" in ctrl.set_volume(50)
+
+
+def test_media_action_volume_step_via_pycaw() -> None:
+    ctrl = SystemController()
+    fake_endpoint = MagicMock()
+    fake_endpoint.GetMasterVolumeLevelScalar.return_value = 0.5
+
+    with (
+        patch.object(sc_mod.sys, "platform", "win32"),
+        patch.object(sc_mod, "_get_endpoint_volume", return_value=fake_endpoint),
+        patch("comtypes.CoInitialize"),
+        patch("comtypes.CoUninitialize"),
+    ):
+        up_msg = ctrl.media_action("volume_up")
+        down_msg = ctrl.media_action("volume_down")
+
+    assert up_msg == "Volumen ajustado al 60%."
+    assert down_msg == "Volumen ajustado al 40%."
+    assert fake_endpoint.SetMasterVolumeLevelScalar.call_args_list == [
+        call(0.6, None),
+        call(0.4, None),
+    ]
+
+
+def test_open_target_dynamic_folder_search_and_not_found(tmp_path: Path) -> None:
+    ctrl = SystemController()
+    tt_dir = tmp_path / "Proyectos" / "TT"
+    tt_dir.mkdir(parents=True)
+    ignored_dir = tmp_path / ".venv" / "TT_ignored"
+    ignored_dir.mkdir(parents=True)
+
+    with (
+        patch.object(ctrl, "_default_folder_roots", return_value=[tmp_path]),
+        patch("jarvis.tools.system_control.subprocess.Popen") as popen_mock,
+    ):
+        msg = ctrl.open_target("tt", kind="folder")
+        direct_msg = ctrl.open_target(str(tt_dir), kind="folder")
+
+    assert "TT" in msg
+    assert "TT" in direct_msg
+    assert popen_mock.call_args_list == [
+        call(["explorer.exe", str(tt_dir)], **_NO_WINDOW_KWARGS),
+        call(["explorer.exe", str(tt_dir)], **_NO_WINDOW_KWARGS),
+    ]
+
+    with (
+        patch.object(ctrl, "_default_folder_roots", return_value=[tmp_path]),
+        patch("jarvis.tools.system_control.webbrowser.open") as wb_mock,
+    ):
+        with pytest.raises(ValueError, match="No encontré la carpeta 'youtube'"):
+            ctrl.open_target("youtube", kind="folder")
+        wb_mock.assert_not_called()
+
+        with pytest.raises(ValueError, match="No encontré la carpeta 'inexistente'"):
+            ctrl.open_target("inexistente", kind="folder")

@@ -59,6 +59,14 @@ _DIRECT_SYSTEM_STATUS_RE = re.compile(
     r"^(?:jarvis[,\s]+)?(?:(?:dime\s+(?:la|el)\s+)?(?:bater[ií]a|estado\s+de\s+la\s+(?:laptop|pc|computadora)|estado\s+del\s+sistema|uso\s+de\s+cpu)|cu[aá]nta\s+ram(?:\s+.*)?)[.!?\s]*$",
     re.IGNORECASE,
 )
+_DIRECT_SET_VOLUME_RE = re.compile(
+    r"^(?:jarvis[,\s]+)?(?:(?:sube|subir|baja|bajar|pon|poner|ajusta|ajustar|deja|dejar|cambia|cambiar|set)\s+)?(?:el\s+)?(?:volumen|volume)\s+(?:a|al|en|to)\s+(\d{1,3})\s*%?[.!?\s]*$",
+    re.IGNORECASE,
+)
+_DIRECT_FOLDER_OPEN_RE = re.compile(
+    r"^(?:jarvis[,\s]+)?(?:abre|abrir|muestra|mostrar|open)\s+(?:la\s+|el\s+)?(?:carpeta|folder|directorio)\s+(?:de\s+|del\s+)?(.+?)[.!?\s]*$",
+    re.IGNORECASE,
+)
 _DIRECT_MEDIA_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"^(?:jarvis[,\s]+)?(?:sube|subir|aumenta)\s+(?:el\s+)?volumen[.!?\s]*$", re.IGNORECASE), "volume_up"),
     (re.compile(r"^(?:jarvis[,\s]+)?(?:baja|bajar|disminuye)\s+(?:el\s+)?volumen[.!?\s]*$", re.IGNORECASE), "volume_down"),
@@ -201,6 +209,11 @@ def _route_direct_tool(user_input: str) -> dict[str, Any] | None:
     if _DIRECT_SYSTEM_STATUS_RE.match(text):
         return {"tool": "system_status"}
 
+    vol_match = _DIRECT_SET_VOLUME_RE.match(text)
+    if vol_match:
+        level = max(0, min(100, int(vol_match.group(1))))
+        return {"tool": "system_media", "action": "set_volume", "level": level}
+
     for pattern, action in _DIRECT_MEDIA_PATTERNS:
         if pattern.match(text):
             return {"tool": "system_media", "action": action}
@@ -217,6 +230,12 @@ def _route_direct_tool(user_input: str) -> dict[str, Any] | None:
             "when": reminder["when"],
             "notes": "",
         }
+
+    folder_match = _DIRECT_FOLDER_OPEN_RE.match(text)
+    if folder_match:
+        folder_name = folder_match.group(1).strip()
+        if folder_name:
+            return {"tool": "system_open_target", "target": folder_name, "kind": "folder"}
 
     launch_match = _DIRECT_APP_LAUNCH_RE.match(text)
     if launch_match:
@@ -587,21 +606,39 @@ class DualAgentOrchestrator:
                     {"tool": tool_name, "error": "Missing action"},
                 )
             try:
+                if action.lower() == "set_volume":
+                    raw_level = tool_call.get("level")
+                    if raw_level is None:
+                        return (
+                            "Falta el nivel de volumen ('level').",
+                            {"tool": tool_name, "error": "Missing level"},
+                        )
+                    level = max(0, min(100, int(raw_level)))
+                    msg = self.system_controller.set_volume(level)
+                    return msg, {"tool": tool_name, "action": "set_volume", "level": level}
                 msg = self.system_controller.media_action(action)
                 return msg, {"tool": tool_name, "action": action.lower()}
-            except ValueError as exc:
+            except (ValueError, TypeError) as exc:
                 return f"No se pudo ejecutar la acción multimedia: {exc}", {"tool": tool_name, "error": str(exc)}
 
         if tool_name == "system_open_target":
             target = str(tool_call.get("target", "")).strip()
+            kind = tool_call.get("kind")
+            kind_str = str(kind).strip().lower() if isinstance(kind, str) and kind.strip() else None
             if not target:
                 return (
                     "Falta el destino a abrir ('target').",
                     {"tool": tool_name, "error": "Missing target"},
                 )
             try:
-                msg = self.system_controller.open_target(target)
-                return msg, {"tool": tool_name, "target": target.lower()}
+                if kind_str is not None:
+                    msg = self.system_controller.open_target(target, kind=kind_str)
+                else:
+                    msg = self.system_controller.open_target(target)
+                result_payload: dict[str, Any] = {"tool": tool_name, "target": target.lower()}
+                if kind_str is not None:
+                    result_payload["kind"] = kind_str
+                return msg, result_payload
             except (ValueError, OSError) as exc:
                 return f"No se pudo abrir '{target}': {exc}", {"tool": tool_name, "error": str(exc)}
 

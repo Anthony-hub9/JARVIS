@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from jarvis.config import settings
-from jarvis.tools.agenda import AgendaStore
+from jarvis.tools.agenda import AgendaStore, parse_spanish_reminder
 from jarvis.tools.app_control import AppController, build_mobile_intent
 from jarvis.tools.memory import MemoryStore, MemoryTurn
 from jarvis.tools.web_search import WebSearchTool
@@ -146,6 +146,15 @@ def _route_direct_tool(user_input: str) -> dict[str, Any] | None:
 
     if _DIRECT_AGENDA_LIST_RE.match(text):
         return {"tool": "agenda_list"}
+
+    reminder = parse_spanish_reminder(text)
+    if reminder is not None:
+        return {
+            "tool": "agenda_add",
+            "title": reminder["title"],
+            "when": reminder["when"],
+            "notes": "",
+        }
 
     launch_match = _DIRECT_APP_LAUNCH_RE.match(text)
     if launch_match:

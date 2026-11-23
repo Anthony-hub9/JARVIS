@@ -3,10 +3,11 @@ from __future__ import annotations
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from fastapi.testclient import TestClient
 
 from jarvis.agents.orchestrator import DualAgentOrchestrator, OrchestratorResult
-from jarvis.hub.server import app
+from jarvis.hub.server import ConnectionManager, app, check_and_dispatch_reminders
 from jarvis.tools.agenda import AgendaStore
 from jarvis.tools.app_control import AppController
 from jarvis.voice.tts import TTSError
@@ -277,5 +278,57 @@ def test_index_contains_mobile_intent_launch_button() -> None:
     assert resp.status_code == 200
     assert "intent-launch-btn" in resp.text
     assert "intent_url" in resp.text
+    assert "reminder_alert" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_check_and_dispatch_reminders_broadcasts_and_posts_ntfy() -> None:
+    store = AgendaStore(":memory:")
+    conn_manager = ConnectionManager()
+    ws = MagicMock()
+    ws.accept = AsyncMock()
+    ws.send_json = AsyncMock()
+
+    await conn_manager.connect(ws)
+    try:
+        ev = store.add_event("Revisar el horno", "2026-11-23T10:00:00")
+        store.add_event("Evento futuro", "2099-01-01T10:00:00")
+
+        mock_client = MagicMock()
+        mock_client.post = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("jarvis.hub.server.httpx.AsyncClient", return_value=mock_client):
+            dispatched = await check_and_dispatch_reminders(
+                store=store,
+                conn_manager=conn_manager,
+                ntfy_topic="jarvis-test-topic",
+                now="2026-11-23T10:01:00",
+            )
+
+        assert [item.id for item in dispatched] == [ev.id]
+        ws.send_json.assert_awaited_once()
+        payload = ws.send_json.await_args.args[0]
+        assert payload["type"] == "reminder_alert"
+        assert payload["device_id"] == "hub"
+        assert payload["response"] == "Recordatorio: Revisar el horno"
+        assert payload["approved"] is True
+        assert payload["event"]["id"] == ev.id
+
+        mock_client.post.assert_awaited_once()
+        assert mock_client.post.await_args.args[0] == "https://ntfy.sh/jarvis-test-topic"
+
+        # Second check should not re-dispatch already notified event
+        second = await check_and_dispatch_reminders(
+            store=store,
+            conn_manager=conn_manager,
+            ntfy_topic="jarvis-test-topic",
+            now="2026-11-23T10:02:00",
+        )
+        assert second == []
+    finally:
+        conn_manager.disconnect(ws)
+        store.close()
 
 

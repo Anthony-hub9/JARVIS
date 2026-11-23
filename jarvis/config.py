@@ -19,5 +19,8 @@ class Settings(BaseSettings):
     hub_host: str = "0.0.0.0"
     hub_port: int = 8000
 
+    ntfy_topic: str = ""
+    reminder_poll_seconds: float = 15.0
+
 
 settings = Settings()

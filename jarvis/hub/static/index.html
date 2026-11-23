@@ -1026,6 +1026,14 @@
         ws.onmessage = (event) => {
           try {
             const data = JSON.parse(event.data);
+            if (data.type === "reminder_alert") {
+              addBotMessage(data);
+              if (data.response && ttsEnabled && !userHasInteracted) {
+                speak(data.response);
+              }
+              loadAgenda();
+              return;
+            }
             addBotMessage(data);
           } catch {
             addBotMessage({ response: String(event.data), approved: true });

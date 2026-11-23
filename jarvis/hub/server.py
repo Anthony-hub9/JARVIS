@@ -1,22 +1,114 @@
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
+import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
+import httpx
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel
 
 from jarvis.agents.orchestrator import DualAgentOrchestrator, OllamaBackend
 from jarvis.config import settings
-from jarvis.tools.agenda import AgendaStore
+from jarvis.tools.agenda import AgendaEvent, AgendaStore
 from jarvis.tools.app_control import AppController
 from jarvis.tools.memory import MemoryStore
 from jarvis.tools.web_search import WebSearchTool
 from jarvis.voice.tts import LocalTTSEngine, TTSError
 
-app = FastAPI(title="JARVIS Hub Central", version="0.1.0")
+logger = logging.getLogger(__name__)
+
+
+class ConnectionManager:
+    def __init__(self) -> None:
+        self._connections: set[WebSocket] = set()
+
+    async def connect(self, websocket: WebSocket) -> None:
+        await websocket.accept()
+        self._connections.add(websocket)
+
+    def disconnect(self, websocket: WebSocket) -> None:
+        self._connections.discard(websocket)
+
+    async def broadcast_json(self, payload: dict[str, Any]) -> None:
+        stale: list[WebSocket] = []
+        for ws in list(self._connections):
+            try:
+                await ws.send_json(payload)
+            except Exception:
+                stale.append(ws)
+        for ws in stale:
+            self._connections.discard(ws)
+
+
+manager = ConnectionManager()
+
+
+async def check_and_dispatch_reminders(
+    store: AgendaStore | None = None,
+    conn_manager: ConnectionManager | None = None,
+    ntfy_topic: str | None = None,
+    now: str | None = None,
+) -> list[AgendaEvent]:
+    agenda = store or get_agenda_store()
+    ws_manager = conn_manager or manager
+    topic = (settings.ntfy_topic if ntfy_topic is None else ntfy_topic).strip()
+
+    due = agenda.due_unnotified(now=now)
+    for ev in due:
+        agenda.mark_notified(ev.id)
+        payload: dict[str, Any] = {
+            "type": "reminder_alert",
+            "device_id": "hub",
+            "response": f"Recordatorio: {ev.title}",
+            "approved": True,
+            "event": {
+                "id": ev.id,
+                "title": ev.title,
+                "when": ev.when,
+                "notes": ev.notes,
+            },
+        }
+        await ws_manager.broadcast_json(payload)
+        if topic:
+            try:
+                async with httpx.AsyncClient(timeout=5.0) as client:
+                    await client.post(
+                        f"https://ntfy.sh/{topic}",
+                        content=ev.title.encode("utf-8"),
+                        headers={"Title": "JARVIS Recordatorio"},
+                    )
+            except Exception as exc:
+                logger.warning("ntfy.sh push failed: %s", exc)
+    return due
+
+
+async def _reminder_loop() -> None:
+    while True:
+        try:
+            await check_and_dispatch_reminders()
+        except Exception as exc:
+            logger.warning("Reminder scheduler error: %s", exc)
+        await asyncio.sleep(max(1.0, float(settings.reminder_poll_seconds)))
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    task = asyncio.create_task(_reminder_loop())
+    try:
+        yield
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+
+app = FastAPI(title="JARVIS Hub Central", version="0.1.0", lifespan=lifespan)
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -219,7 +311,7 @@ async def close_app_endpoint(payload: AppActionRequest) -> JSONResponse:
 
 @app.websocket("/ws/{device_id}")
 async def websocket_endpoint(websocket: WebSocket, device_id: str) -> None:
-    await websocket.accept()
+    await manager.connect(websocket)
     orchestrator = get_orchestrator()
     try:
         while True:
@@ -253,3 +345,5 @@ async def websocket_endpoint(websocket: WebSocket, device_id: str) -> None:
             )
     except WebSocketDisconnect:
         pass
+    finally:
+        manager.disconnect(websocket)

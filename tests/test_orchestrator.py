@@ -621,3 +621,35 @@ async def test_saved_facts_are_injected_into_normal_chat_prompts() -> None:
         assert "mi campeón favorito es Yasuo" in prompt
     finally:
         memory.close()
+
+
+@pytest.mark.asyncio
+async def test_fast_command_router_routes_spanish_reminder_to_agenda_add() -> None:
+    from jarvis.agents.orchestrator import _route_direct_tool
+
+    routed = _route_direct_tool("recuérdame en 10 minutos revisar el horno")
+    assert routed is not None
+    assert routed["tool"] == "agenda_add"
+    assert routed["title"] == "revisar el horno"
+    assert "T" in routed["when"]
+
+    store = AgendaStore(":memory:")
+    backend = MockBackend([])
+    try:
+        orch = DualAgentOrchestrator(
+            backend=backend,
+            agenda_store=store,
+            fast_supervisor=True,
+        )
+        res = await orch.run("recuérdame en 10 minutos revisar el horno", device_id="pc")
+        assert res.approved is True
+        assert res.attempts == 1
+        assert backend.calls == []
+        assert res.tool_result is not None
+        assert res.tool_result["tool"] == "agenda_add"
+        assert res.tool_result["event"]["title"] == "revisar el horno"
+        events = store.list_events()
+        assert len(events) == 1
+        assert events[0].title == "revisar el horno"
+    finally:
+        store.close()

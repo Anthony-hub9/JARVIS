@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import jarvis.agents.orchestrator as orchestrator_mod
-from jarvis.agents.orchestrator import DualAgentOrchestrator, OllamaBackend
+from jarvis.agents.orchestrator import DualAgentOrchestrator, OllamaBackend, _clean_assistant_response
 from jarvis.config import Settings
 from jarvis.tools.agenda import AgendaStore
 from jarvis.tools.memory import MemoryStore
@@ -221,17 +221,76 @@ class VisionMockBackend:
 
 @pytest.mark.asyncio
 async def test_orchestrator_routes_images_to_vision_model() -> None:
-    backend = VisionMockBackend(["Poca munición, recarga.", "APPROVED"])
-    orch = DualAgentOrchestrator(backend=backend, vision_model="moondream", supervisor_model="qwen2.5:1.5b")
+    backend = VisionMockBackend(["Low ammo warning on HUD.", "Poca munición, recarga.", "APPROVED"])
+    orch = DualAgentOrchestrator(
+        backend=backend,
+        executor_model="qwen2.5:1.5b",
+        vision_model="moondream",
+        supervisor_model="qwen2.5:1.5b",
+    )
 
-    res = await orch.run("", device_id="pc_game", images=["ZmFrZV9mcmFtZQ=="])
+    res = await orch.run("[Modo Juego] Analiza", device_id="pc_game", images=["ZmFrZV9mcmFtZQ=="])
 
     assert res.approved is True
     assert res.response == "Poca munición, recarga."
     assert backend.calls[0][0] == "moondream"
+    assert "English" in backend.calls[0][1]
     assert backend.calls[0][2] == ["ZmFrZV9mcmFtZQ=="]
     assert backend.calls[1][0] == "qwen2.5:1.5b"
+    assert "Low ammo warning on HUD." in backend.calls[1][1]
+    assert "munición baja" in backend.calls[1][1]
     assert backend.calls[1][2] is None
+    assert backend.calls[2][0] == "qwen2.5:1.5b"
+    assert backend.calls[2][2] is None
+
+
+@pytest.mark.asyncio
+async def test_describe_image_in_spanish_sanitizes_thai_and_repetition() -> None:
+    backend = VisionMockBackend(["A laptop screen showing Python code. รามารามารามารามา", "Veo una laptop con código Python."])
+    orch = DualAgentOrchestrator(backend=backend, executor_model="qwen2.5:1.5b", vision_model="moondream")
+
+    answer = await orch._describe_image_in_spanish("Describe esta foto", ["IMG_B64"])
+    assert answer == "Veo una laptop con código Python."
+    assert "ราม" not in backend.calls[1][1]
+    assert "A laptop screen showing Python code." in backend.calls[1][1]
+
+    gibberish_backend = VisionMockBackend(["รามารามารามารามา"])
+    gibberish_orch = DualAgentOrchestrator(backend=gibberish_backend, executor_model="qwen2.5:1.5b", vision_model="moondream")
+    fallback = await gibberish_orch._describe_image_in_spanish("Describe esta foto", ["IMG_B64"])
+    assert fallback == "No pude obtener una descripción clara de la imagen."
+    assert len(gibberish_backend.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_ollama_backend_includes_repeat_penalty() -> None:
+    captured_payload: dict[str, object] = {}
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, str]:
+            return {"response": "ok"}
+
+    class FakeClient:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        async def __aenter__(self) -> "FakeClient":
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def post(self, _url: str, json: dict[str, object]) -> FakeResponse:
+            captured_payload.update(json)
+            return FakeResponse()
+
+    with patch("httpx.AsyncClient", FakeClient):
+        result = await OllamaBackend().generate("moondream", "Describe", images=["IMG"])
+
+    assert result == "ok"
+    assert captured_payload["options"] == {"num_predict": 512, "num_ctx": 8192, "repeat_penalty": 1.15}
 
 
 @pytest.mark.asyncio
@@ -317,10 +376,12 @@ async def test_orchestrator_shared_memory_injection_and_turn_recording() -> None
 
         res2 = await orch.run("¿Qué dije antes?", device_id="s24_plus")
         assert res2.approved is True
-        # Second prompt must include the shared turns from laptop
+        # Second prompt must include the shared turns from laptop without device tag
         second_prompt = backend.calls[1][1]
-        assert "[laptop] user: Estoy en mi laptop" in second_prompt
-        assert "[laptop] assistant: Entendido, recordaré tu laptop." in second_prompt
+        assert "- Tú: Estoy en mi laptop" in second_prompt
+        assert "- JARVIS: Entendido, recordaré tu laptop." in second_prompt
+        assert "[laptop]" not in second_prompt
+        assert "[Dispositivo:" not in second_prompt
 
         # Rejected/circuit-broken run must NOT be recorded in memory
         orch.fast_supervisor = False
@@ -816,3 +877,76 @@ async def test_fast_command_router_exact_volume_and_dynamic_folder(tmp_path: Pat
     assert "No encontré la carpeta 'NoExisteXYZ'" in missing_res.response
     assert [c for c in fake_launcher.mock_calls if c[0] != "__bool__"] == []
     assert backend.calls == []
+
+
+def test_build_executor_prompt_omits_device_tags_and_clean_response_strips_echo() -> None:
+    from jarvis.tools.memory import MemoryTurn
+
+    orch = DualAgentOrchestrator(backend=MockBackend([]))
+    turns = [MemoryTurn(id=1, device_id="s24-plus", role="user", content="Hola", created_at="2026-01-01")]
+
+    prompt = orch._build_executor_prompt("¿Qué hora es?", "s24-plus", "", recent_turns=turns)
+    vision_prompt = orch._build_executor_prompt("¿Qué ves?", "s24-plus", "", has_images=True, recent_turns=turns)
+
+    assert "[Dispositivo: s24-plus]" not in prompt
+    assert "[s24-plus]" not in prompt
+    assert "Responde directo sin mencionar el nombre del dispositivo." in prompt
+    assert "Usuario: ¿Qué hora es?" in prompt
+
+    assert "[Dispositivo: s24-plus]" not in vision_prompt
+    assert "[s24-plus]" not in vision_prompt
+    assert "Solicitud: ¿Qué ves?" in vision_prompt
+
+    assert _clean_assistant_response("Dispositivo s24-plus: Hola") == "Hola"
+    assert _clean_assistant_response("[Dispositivo: s24-plus] Hola") == "Hola"
+    assert _clean_assistant_response("s24-plus: Hola") == "Hola"
+    assert _clean_assistant_response("Hola, ¿en qué te ayudo?") == "Hola, ¿en qué te ayudo?"
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_run_cleans_device_echo_prefix() -> None:
+    backend = MockBackend(["Dispositivo s24-plus: Son las diez."])
+    orch = DualAgentOrchestrator(backend=backend, fast_supervisor=True)
+
+    res = await orch.run("Hola JARVIS", device_id="s24-plus")
+
+    assert res.approved is True
+    assert res.response == "Son las diez."
+
+
+def test_conversational_greeting_prompt_omits_tool_schemas_and_formats_turns() -> None:
+    from jarvis.tools.memory import MemoryTurn
+
+    orch = DualAgentOrchestrator(backend=MockBackend([]))
+    turns = [
+        MemoryTurn(id=1, device_id="pc", role="user", content="Buenas", created_at="2026-01-01"),
+        MemoryTurn(id=2, device_id="pc", role="assistant", content="Hola, ¿cómo estás?", created_at="2026-01-01"),
+    ]
+
+    prompt = orch._build_executor_prompt("hola", "pc", "", recent_turns=turns)
+
+    assert "Herramientas disponibles" not in prompt
+    assert '{"tool":' not in prompt
+    assert "- Tú: Buenas" in prompt
+    assert "- JARVIS: Hola, ¿cómo estás?" in prompt
+    assert "- user:" not in prompt
+    assert "- assistant:" not in prompt
+
+
+def test_clean_assistant_response_strips_assistant_and_jarvis_prefixes() -> None:
+    assert _clean_assistant_response("Assistant: Hola señor") == "Hola señor"
+    assert _clean_assistant_response("JARVIS: Buenos días") == "Buenos días"
+    assert _clean_assistant_response("Assistant: Dispositivo s24-plus: Hola") == "Hola"
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_never_leaks_raw_tool_json_on_greeting() -> None:
+    backend = MockBackend(['Assistant: {"tool": "agenda_list"}'])
+    orch = DualAgentOrchestrator(backend=backend, fast_supervisor=True)
+
+    res = await orch.run("hola", device_id="pc")
+
+    assert res.approved is True
+    assert '"tool"' not in res.response
+    assert "agenda_list" not in res.response
+    assert res.response == "Hola, ¿en qué puedo ayudarte?"

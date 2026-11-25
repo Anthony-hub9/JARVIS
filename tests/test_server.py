@@ -8,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from jarvis.agents.orchestrator import DualAgentOrchestrator, OrchestratorResult
+from jarvis.config import settings
 from jarvis.hub import server as hub_server
 from jarvis.hub.server import ConnectionManager, app, check_and_dispatch_reminders, get_agenda_store
 from jarvis.tools.agenda import AgendaStore
@@ -42,9 +43,9 @@ def test_health_endpoint() -> None:
     data = resp.json()
     assert data["status"] == "ok"
     assert data["backend"] == "ollama"
-    assert data["executor"] == "qwen2.5:1.5b"
-    assert data["supervisor"] == "qwen2.5:1.5b"
-    assert data["vision"] == "moondream"
+    assert data["executor"] == settings.executor_model
+    assert data["supervisor"] == settings.supervisor_model
+    assert data["vision"] == settings.vision_model
 
 
 def test_websocket_chat_agenda_and_game_frame() -> None:
@@ -56,8 +57,10 @@ def test_websocket_chat_agenda_and_game_frame() -> None:
                 "APPROVED",
                 '{"tool": "agenda_add", "title": "Dentista", "when": "2099-05-01T16:00:00"}',
                 "APPROVED",
+                "Boss attacking from the left.",
                 "Usa cobertura a la derecha.",
                 "APPROVED",
+                "Low ammo and enemy flanking.",
                 "¡Cuidado, poca munición y enemigo al flanco!",
                 "APPROVED",
                 "Sin imagen adjunta, dime qué necesitas.",
@@ -110,15 +113,15 @@ def test_websocket_chat_agenda_and_game_frame() -> None:
                 assert frame_resp["approved"] is True
                 assert frame_resp["response"] == "¡Cuidado, poca munición y enemigo al flanco!"
                 # Vision call used vision_model ("moondream") with the decoded base64 list
-                assert fake_backend.calls[6][0] == "moondream"
-                assert fake_backend.calls[6][2] == ["Z2FtZV9mcmFtZQ=="]
+                assert fake_backend.calls[7][0] == "moondream"
+                assert fake_backend.calls[7][2] == ["Z2FtZV9mcmFtZQ=="]
 
                 # game_frame without image must not crash and falls back to text executor
                 ws.send_text(json.dumps({"type": "game_frame", "prompt": "¿Qué hago?"}))
                 no_img_resp = ws.receive_json()
                 assert no_img_resp["approved"] is True
-                assert fake_backend.calls[8][0] == "qwen2.5:1.5b"
-                assert fake_backend.calls[8][2] is None
+                assert fake_backend.calls[10][0] == settings.executor_model
+                assert fake_backend.calls[10][2] is None
     finally:
         store.close()
 

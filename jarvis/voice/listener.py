@@ -42,7 +42,7 @@ class BackgroundVoiceListener:
         language: str = "es-MX",
         sample_rate: int = 16000,
         chunk_duration: float = 0.1,
-        energy_threshold: float = 400.0,
+        energy_threshold: float = 250.0,
         silence_duration: float = 0.9,
         max_utterance_seconds: float = 10.0,
     ) -> None:
@@ -146,15 +146,20 @@ class BackgroundVoiceListener:
             return
         self.is_speaking = True
         try:
-            if media_type == "audio/mpeg":
-                if not pygame.mixer.get_init():
-                    pygame.mixer.init()
-                pygame.mixer.music.load(io.BytesIO(audio_bytes))
-                pygame.mixer.music.play()
-                while pygame.mixer.music.get_busy() and not self._stop_event.is_set():
-                    time.sleep(0.05)
-            elif media_type == "audio/wav" and winsound is not None:
-                winsound.PlaySound(audio_bytes, winsound.SND_MEMORY)
+            if media_type in ("audio/mpeg", "audio/wav"):
+                try:
+                    if not pygame.mixer.get_init():
+                        pygame.mixer.init()
+                    pygame.mixer.music.load(io.BytesIO(audio_bytes))
+                    pygame.mixer.music.play()
+                    while pygame.mixer.music.get_busy() and not self._stop_event.is_set():
+                        time.sleep(0.05)
+                    return
+                except Exception as exc:
+                    if media_type != "audio/wav" or winsound is None:
+                        raise
+                    logger.warning("pygame WAV playback failed, falling back to winsound: %s", exc)
+                    winsound.PlaySound(audio_bytes, winsound.SND_MEMORY)
         finally:
             self.is_speaking = False
 
@@ -162,6 +167,7 @@ class BackgroundVoiceListener:
         """Handle a recognized transcript if it contains the wake word."""
         if not transcript or not WAKE_WORD_REGEX.search(transcript):
             return False
+        logger.info("Voice command received: %s", transcript)
 
         async def _handle() -> tuple[bytes, str] | None:
             result = await self._get_orchestrator().run(transcript, device_id="laptop")

@@ -31,3 +31,17 @@ graphify-out/
 
 # Logs
 *.log
+
+# Local voice models & RVC artifacts
+models/
+rmvpe.pt
+hubert_base.pt
+albedo_prueba.wav
+
+# Android Studio & Gradle caches
+android/.gradle/
+android/build/
+android/app/build/
+android/.idea/
+android/local.properties
+*.iml

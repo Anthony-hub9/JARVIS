@@ -132,7 +132,10 @@ async def test_synthesize_audio_neural_profiles(
             yield {"type": "audio", "data": b"\x00\x01MP3"}
 
     assert profile in VOICE_PROFILES
-    with patch("jarvis.voice.tts.edge_tts.Communicate", FakeCommunicate):
+    with (
+        patch("jarvis.voice.tts.edge_tts.Communicate", FakeCommunicate),
+        patch("jarvis.voice.tts._ALBEDO_MODEL_PATH", Path("__nonexistent_albedo__.pth")),
+    ):
         audio_bytes, media_type = await engine.synthesize_audio(
             "  Buenos días señor  ", profile=profile
         )

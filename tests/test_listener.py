@@ -132,7 +132,33 @@ def test_process_transcript_runs_orchestrator_and_plays_mp3() -> None:
     assert listener.is_speaking is False
 
 
-def test_play_audio_wav_uses_winsound_and_pauses_capture() -> None:
+def test_default_energy_threshold_is_250() -> None:
+    listener = BackgroundVoiceListener()
+    assert listener.energy_threshold == 250.0
+
+
+def test_play_audio_wav_uses_pygame_and_pauses_capture() -> None:
+    listener = BackgroundVoiceListener()
+    seen_speaking: list[bool] = []
+
+    def fake_play() -> None:
+        seen_speaking.append(listener.is_speaking)
+
+    with (
+        patch("jarvis.voice.listener.pygame.mixer.get_init", return_value=True),
+        patch("jarvis.voice.listener.pygame.mixer.music.load") as mock_load,
+        patch("jarvis.voice.listener.pygame.mixer.music.play", side_effect=fake_play) as mock_play,
+        patch("jarvis.voice.listener.pygame.mixer.music.get_busy", return_value=False),
+    ):
+        listener.play_audio(b"RIFF....WAVE", "audio/wav")
+
+    mock_load.assert_called_once()
+    mock_play.assert_called_once_with()
+    assert seen_speaking == [True]
+    assert listener.is_speaking is False
+
+
+def test_play_audio_wav_falls_back_to_winsound_on_pygame_error() -> None:
     listener = BackgroundVoiceListener()
     seen_speaking: list[bool] = []
 
@@ -143,9 +169,14 @@ def test_play_audio_wav_uses_winsound_and_pauses_capture() -> None:
     mock_winsound.SND_MEMORY = 4
     mock_winsound.PlaySound.side_effect = fake_playsound
 
-    with patch("jarvis.voice.listener.winsound", mock_winsound):
+    with (
+        patch("jarvis.voice.listener.pygame.mixer.get_init", return_value=True),
+        patch("jarvis.voice.listener.pygame.mixer.music.load", side_effect=RuntimeError("pygame wav error")),
+        patch("jarvis.voice.listener.winsound", mock_winsound),
+    ):
         listener.play_audio(b"RIFF....WAVE", "audio/wav")
 
+    mock_winsound.PlaySound.assert_called_once_with(b"RIFF....WAVE", 4)
     assert seen_speaking == [True]
     assert listener.is_speaking is False
 

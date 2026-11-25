@@ -20,7 +20,7 @@ from jarvis.tools.app_control import AppController
 from jarvis.tools.memory import MemoryStore
 from jarvis.tools.system_control import SystemController
 from jarvis.tools.web_search import WebSearchTool
-from jarvis.voice.tts import LocalTTSEngine, TTSError
+from jarvis.voice.tts import LocalTTSEngine, TTSError, preload_albedo_rvc
 
 logger = logging.getLogger(__name__)
 
@@ -102,10 +102,14 @@ async def _reminder_loop() -> None:
 async def lifespan(_app: FastAPI):
     await asyncio.to_thread(get_app_controller)
     task = asyncio.create_task(_reminder_loop())
+    preload_task = asyncio.create_task(asyncio.to_thread(preload_albedo_rvc))
     try:
         yield
     finally:
+        preload_task.cancel()
         task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await preload_task
         with contextlib.suppress(asyncio.CancelledError):
             await task
 

@@ -150,14 +150,17 @@ def test_ensure_ollama_running_spawns_when_port_closed_and_exe_found() -> None:
     tray = JarvisTrayApp()
     mock_proc = MagicMock()
     with (
-        patch("jarvis.clients.tray_app._is_port_open", return_value=False),
+        patch("jarvis.clients.tray_app._is_port_open", side_effect=[False, False, True]) as mock_port,
         patch("jarvis.clients.tray_app.shutil.which", return_value=r"C:\Ollama\ollama.exe"),
         patch("jarvis.clients.tray_app.subprocess.Popen", return_value=mock_proc) as mock_popen,
+        patch("jarvis.clients.tray_app.time.sleep") as mock_sleep,
     ):
         started = tray.ensure_ollama_running()
 
     assert started is True
     assert tray.ollama_proc is mock_proc
+    assert mock_port.call_count == 3
+    mock_sleep.assert_called_once_with(0.25)
     mock_popen.assert_called_once_with(
         [r"C:\Ollama\ollama.exe", "serve"],
         stdout=subprocess.DEVNULL,

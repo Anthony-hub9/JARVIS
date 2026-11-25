@@ -6,6 +6,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 import webbrowser
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,7 @@ import pystray
 import uvicorn
 from PIL import Image, ImageDraw
 
+from jarvis.clients.autostart import is_autostart_enabled, toggle_autostart as toggle_windows_autostart
 from jarvis.config import settings
 from jarvis.voice.listener import BackgroundVoiceListener
 
@@ -94,6 +96,10 @@ class JarvisTrayApp:
             stderr=subprocess.DEVNULL,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
+        for _ in range(24):
+            if _is_port_open("127.0.0.1", ollama_port):
+                break
+            time.sleep(0.25)
         return True
 
     def start_server(self) -> bool:
@@ -131,6 +137,9 @@ class JarvisTrayApp:
         current = getattr(self.voice_listener, "voice_profile", "jarvis")
         self.voice_listener.voice_profile = "albedo" if current == "jarvis" else "jarvis"
 
+    def toggle_autostart(self, _icon: Any = None, _item: Any = None) -> bool:
+        return toggle_windows_autostart()
+
     def quit(self, icon: Any = None, _item: Any = None) -> None:
         self.voice_listener.stop()
         if self.server is not None:
@@ -161,6 +170,11 @@ class JarvisTrayApp:
                 "Voz: JARVIS / Albedo",
                 self.toggle_voice_profile,
                 checked=lambda _: self.voice_listener.voice_profile == "albedo",
+            ),
+            pystray.MenuItem(
+                "Iniciar con Windows",
+                self.toggle_autostart,
+                checked=lambda _: is_autostart_enabled(),
             ),
             pystray.MenuItem("Salir", self.quit),
         )

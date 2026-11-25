@@ -3,16 +3,26 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import shutil
 import sys
 import tempfile
+import threading
 from pathlib import Path
+from typing import Any
 
 try:
     import edge_tts
 except ImportError:  # pragma: no cover - optional runtime fallback
     edge_tts = None  # type: ignore[assignment]
+
+logger = logging.getLogger(__name__)
+
+_ALBEDO_MODEL_PATH = Path("models/voices/albedo/albedo.pth")
+_ALBEDO_INDEX_PATH = Path("models/voices/albedo/albedo.index")
+_rvc_lock = threading.Lock()
+_rvc_loader: Any = None
 
 
 VOICE_PROFILES: dict[str, dict[str, str]] = {
@@ -45,6 +55,101 @@ _POWERSHELL_TTS_SCRIPT = (
     "$synth.Speak($env:JARVIS_TTS_TEXT) "
     "} finally { $synth.Dispose() }"
 )
+
+
+def _ensure_scripts_in_path() -> None:
+    """Ensure the Python Scripts directory (containing ffmpeg.exe) is on PATH."""
+    exe_dir = Path(sys.executable).resolve().parent
+    scripts_dir = exe_dir if exe_dir.name.lower() == "scripts" else exe_dir / "Scripts"
+    if not scripts_dir.is_dir():
+        return
+    current_path = os.environ.get("PATH", "")
+    path_entries = current_path.split(os.pathsep) if current_path else []
+    scripts_str = str(scripts_dir)
+    if scripts_str not in path_entries:
+        os.environ["PATH"] = (
+            f"{scripts_str}{os.pathsep}{current_path}" if current_path else scripts_str
+        )
+
+
+def _get_rvc_loader(model_path: Path, index_path: Path) -> Any:
+    """Return a cached infer_rvc_python.BaseLoader configured for the Albedo voice."""
+    global _rvc_loader
+    if _rvc_loader is not None:
+        return _rvc_loader
+
+    import torch
+    from infer_rvc_python import BaseLoader
+
+    use_cuda = torch.cuda.is_available()
+    pitch_algo = "rmvpe" if use_cuda else "pm"
+    loader = BaseLoader(only_cpu=not use_cuda)
+    loader.apply_conf(
+        tag="albedo",
+        file_model=str(model_path),
+        pitch_algo=pitch_algo,
+        file_index=str(index_path) if index_path.is_file() else "",
+    )
+    _rvc_loader = loader
+    return _rvc_loader
+
+
+def preload_albedo_rvc() -> bool:
+    """Preload the Albedo RVC model into memory if available; never raises."""
+    if not _ALBEDO_MODEL_PATH.is_file():
+        logger.debug(
+            "Modelo RVC Albedo no encontrado en %s; omitiendo precarga.",
+            _ALBEDO_MODEL_PATH,
+        )
+        return False
+    try:
+        with _rvc_lock:
+            _ensure_scripts_in_path()
+            _get_rvc_loader(_ALBEDO_MODEL_PATH, _ALBEDO_INDEX_PATH)
+        logger.info("Modelo RVC Albedo precargado correctamente.")
+        return True
+    except Exception as exc:
+        logger.warning("No se pudo precargar el modelo RVC Albedo: %s", exc)
+        return False
+
+
+def _convert_mp3_to_rvc_wav(
+    mp3_bytes: bytes,
+    model_path: Path,
+    index_path: Path,
+) -> bytes:
+    """Convert base MP3 bytes to WAV bytes using the local RVC Albedo model."""
+    _ensure_scripts_in_path()
+    tmp_dir = Path(tempfile.mkdtemp(prefix="jarvis_rvc_"))
+    input_path = tmp_dir / "input.mp3"
+    output_files: list[str] = []
+    try:
+        input_path.write_bytes(mp3_bytes)
+        with _rvc_lock:
+            loader = _get_rvc_loader(model_path, index_path)
+            output_files = loader(
+                str(input_path),
+                tag_list=["albedo"],
+                overwrite=True,
+                type_output="wav",
+                show_progress=False,
+            )
+
+        if not output_files:
+            raise TTSError("La conversión RVC no generó ningún archivo de salida.")
+
+        output_path = Path(output_files[0])
+        if not output_path.is_file():
+            raise TTSError(f"No se encontró el archivo WAV de salida RVC: {output_path}")
+
+        wav_bytes = output_path.read_bytes()
+        if not wav_bytes:
+            raise TTSError("El archivo WAV generado por RVC está vacío.")
+        return wav_bytes
+    finally:
+        for out_file in output_files:
+            Path(out_file).unlink(missing_ok=True)
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 class LocalTTSEngine:
@@ -149,6 +254,26 @@ class LocalTTSEngine:
                         chunks.append(chunk["data"])
                 mp3_bytes = b"".join(chunks)
                 if mp3_bytes:
+                    if profile_key == "albedo":
+                        if _ALBEDO_MODEL_PATH.is_file():
+                            try:
+                                wav_bytes = await asyncio.to_thread(
+                                    _convert_mp3_to_rvc_wav,
+                                    mp3_bytes,
+                                    _ALBEDO_MODEL_PATH,
+                                    _ALBEDO_INDEX_PATH,
+                                )
+                                return wav_bytes, "audio/wav"
+                            except Exception as exc:
+                                logger.warning(
+                                    "Error en conversión RVC para 'albedo'; usando audio base edge-tts: %s",
+                                    exc,
+                                )
+                        else:
+                            logger.warning(
+                                "Modelo RVC no encontrado en %s; usando audio base edge-tts para 'albedo'.",
+                                _ALBEDO_MODEL_PATH,
+                            )
                     return mp3_bytes, "audio/mpeg"
             except Exception:
                 pass

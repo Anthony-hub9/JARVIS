@@ -29,7 +29,7 @@ async def test_ollama_backend_generate():
             "prompt": "Hola",
             "stream": False,
             "keep_alive": "15m",
-            "options": {"num_predict": 140, "num_ctx": 2048},
+            "options": {"num_predict": 512, "num_ctx": 8192, "repeat_penalty": 1.15},
         },
     )
 
@@ -57,7 +57,7 @@ async def test_ollama_backend_generate_with_images():
             "prompt": "Analiza el frame",
             "stream": False,
             "keep_alive": "15m",
-            "options": {"num_predict": 140, "num_ctx": 2048},
+            "options": {"num_predict": 512, "num_ctx": 8192, "repeat_penalty": 1.15},
             "images": ["ZmFrZQ=="],
         },
     )

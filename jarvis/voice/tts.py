@@ -80,6 +80,9 @@ def _get_rvc_loader(model_path: Path, index_path: Path) -> Any:
         return _rvc_loader
 
     import torch
+    if hasattr(torch, "backends") and hasattr(torch.backends, "cudnn"):
+        # Avoid loading torch's cudnn64_9.dll, which conflicts with ctranslate2's cudnn64_9.dll.
+        torch.backends.cudnn.enabled = False
     from infer_rvc_python import BaseLoader
 
     use_cuda = torch.cuda.is_available()

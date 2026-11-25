@@ -457,3 +457,34 @@ async def test_audio_cache_hit_avoids_edge_tts_and_rvc_second_call(
         await engine.synthesize_audio(long_text, profile="jarvis")
 
     assert edge_calls == 3
+
+
+def test_get_rvc_loader_disables_cudnn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pth_file = tmp_path / "albedo.pth"
+    pth_file.write_bytes(b"fake-pth")
+    index_file = tmp_path / "albedo.index"
+    index_file.write_bytes(b"fake-index")
+
+    cudnn_ns = SimpleNamespace(enabled=True)
+    fake_torch = SimpleNamespace(
+        cuda=SimpleNamespace(is_available=lambda: True),
+        backends=SimpleNamespace(cudnn=cudnn_ns),
+    )
+    cudnn_enabled_during_loader_init: list[bool] = []
+
+    class FakeBaseLoader:
+        def __init__(self, only_cpu: bool = False, **kwargs) -> None:
+            cudnn_enabled_during_loader_init.append(cudnn_ns.enabled)
+
+        def apply_conf(self, **kwargs) -> str:
+            return "OK"
+
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setitem(sys.modules, "infer_rvc_python", SimpleNamespace(BaseLoader=FakeBaseLoader))
+
+    tts_mod._get_rvc_loader(pth_file, index_file)
+
+    assert cudnn_ns.enabled is False
+    assert cudnn_enabled_during_loader_init == [False]

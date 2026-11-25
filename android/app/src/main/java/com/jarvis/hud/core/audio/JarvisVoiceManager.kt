@@ -1,22 +1,26 @@
 package com.jarvis.hud.core.audio
 
 import android.Manifest
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.media.MediaPlayer
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.speech.RecognitionListener
+import android.speech.RecognitionService
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.util.Log
 import androidx.core.content.ContextCompat
+import com.jarvis.hud.domain.usecase.WakeWordMatcher
 import java.io.File
 import java.util.Locale
 
@@ -47,6 +51,9 @@ class JarvisVoiceManager(
     private var awaitingActiveCommand = false
 
     private var lastErrorReportMs = 0L
+    private var lastPartialTranscript: String = ""
+    private var useGoogleTtsFallback = false
+    private val wakeWordMatcher = WakeWordMatcher()
 
     init {
         initAndroidTts()
@@ -196,13 +203,26 @@ class JarvisVoiceManager(
         if (isSpeaking) return
 
         recreateRecognizer()
+        lastPartialTranscript = ""
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, "es-MX")
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "es-MX")
             putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, context.packageName)
-            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
-            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, MAX_RECOGNITION_RESULTS)
+            putExtra(
+                RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS,
+                COMPLETE_SILENCE_LENGTH_MS
+            )
+            putExtra(
+                RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS,
+                POSSIBLY_COMPLETE_SILENCE_LENGTH_MS
+            )
+            putExtra(
+                RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS,
+                MINIMUM_SPEECH_LENGTH_MS
+            )
         }
         isListening = true
         onListeningChanged(true)
@@ -218,6 +238,7 @@ class JarvisVoiceManager(
 
     private fun stopRecognizerInternal() {
         isListening = false
+        lastPartialTranscript = ""
         onListeningChanged(false)
         runCatching { speechRecognizer?.cancel() }
     }
@@ -225,7 +246,14 @@ class JarvisVoiceManager(
     private fun recreateRecognizer() {
         runCatching { speechRecognizer?.destroy() }
         speechRecognizer = null
-        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(context).apply {
+        lastPartialTranscript = ""
+        val recognizer = if (useGoogleTtsFallback && isGoogleTtsRecognitionInstalled()) {
+            Log.d(TAG, "recreateRecognizer: using GoogleTTSRecognitionService fallback")
+            SpeechRecognizer.createSpeechRecognizer(context, GOOGLE_TTS_RECOGNITION_COMPONENT)
+        } else {
+            SpeechRecognizer.createSpeechRecognizer(context)
+        }
+        speechRecognizer = recognizer.apply {
             setRecognitionListener(object : RecognitionListener {
                 override fun onReadyForSpeech(params: Bundle?) {
                     Log.d(TAG, "onReadyForSpeech")
@@ -245,39 +273,111 @@ class JarvisVoiceManager(
                     )
                     isListening = false
                     onListeningChanged(false)
+                    val partialFallback = lastPartialTranscript
+                    lastPartialTranscript = ""
+
                     val isNoMatchOrTimeout = error == SpeechRecognizer.ERROR_NO_MATCH ||
                         error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT
+                    if (isNoMatchOrTimeout && partialFallback.isNotEmpty()) {
+                        val isWakeLoop = wakeWordEnabled && !awaitingActiveCommand
+                        awaitingActiveCommand = false
+                        Log.d(
+                            TAG,
+                            "onError: emitting partial fallback (len=${partialFallback.length}, isWakeLoop=$isWakeLoop)"
+                        )
+                        onTranscript(partialFallback, isWakeLoop)
+                        return
+                    }
+
+                    if (!useGoogleTtsFallback &&
+                        (error == SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE ||
+                            error == SpeechRecognizer.ERROR_CLIENT) &&
+                        isGoogleTtsRecognitionInstalled()
+                    ) {
+                        useGoogleTtsFallback = true
+                        Log.d(TAG, "onError: switching to GoogleTTSRecognitionService fallback")
+                    }
+
                     if (!(wakeWordEnabled && isNoMatchOrTimeout)) {
                         reportErrorThrottled(mapSpeechError(error))
                     }
                     if (wakeWordEnabled && !isSpeaking) {
-                        scheduleWakeWordRestart(450L)
+                        val restartDelayMs = when (error) {
+                            SpeechRecognizer.ERROR_NO_MATCH,
+                            SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> WAKE_RESTART_FAST_MS
+                            SpeechRecognizer.ERROR_RECOGNIZER_BUSY,
+                            SpeechRecognizer.ERROR_CLIENT -> WAKE_RESTART_BACKOFF_MS
+                            else -> WAKE_RESTART_DEFAULT_MS
+                        }
+                        scheduleWakeWordRestart(restartDelayMs)
                     }
                 }
 
                 override fun onResults(results: Bundle?) {
                     isListening = false
                     onListeningChanged(false)
-                    val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                    val text = matches?.firstOrNull()?.trim().orEmpty()
+                    val partialFallback = lastPartialTranscript
+                    lastPartialTranscript = ""
+                    val matches = results
+                        ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                        .orEmpty()
                     val isWakeLoop = wakeWordEnabled && !awaitingActiveCommand
                     awaitingActiveCommand = false
+                    val bestMatch = wakeWordMatcher.selectBestMatch(matches, isWakeLoop)
+                    val text = bestMatch.ifEmpty { partialFallback }
                     Log.d(
                         TAG,
-                        "onResults: matches=${matches?.size ?: 0}, textLength=${text.length}, isWakeLoop=$isWakeLoop"
+                        "onResults: matches=${matches.size}, textLength=${text.length}, usedPartial=${bestMatch.isEmpty() && partialFallback.isNotEmpty()}, isWakeLoop=$isWakeLoop"
                     )
 
                     if (text.isNotEmpty()) {
                         onTranscript(text, isWakeLoop)
                     } else if (wakeWordEnabled && !isSpeaking) {
-                        scheduleWakeWordRestart(300L)
+                        scheduleWakeWordRestart(WAKE_RESTART_FAST_MS)
                     }
                 }
 
-                override fun onPartialResults(partialResults: Bundle?) = Unit
+                override fun onPartialResults(partialResults: Bundle?) {
+                    val partials = partialResults
+                        ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                    val candidate = partials?.firstOrNull { it.isNotBlank() }?.trim().orEmpty()
+                    if (candidate.isNotEmpty()) {
+                        lastPartialTranscript = candidate
+                    }
+                }
                 override fun onEvent(eventType: Int, params: Bundle?) = Unit
             })
         }
+    }
+
+    private fun isGoogleTtsRecognitionInstalled(): Boolean {
+        val intent = Intent(RecognitionService.SERVICE_INTERFACE).apply {
+            component = GOOGLE_TTS_RECOGNITION_COMPONENT
+        }
+        val services = runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                context.packageManager.queryIntentServices(
+                    intent,
+                    PackageManager.ResolveInfoFlags.of(0L)
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                context.packageManager.queryIntentServices(intent, 0)
+            }
+        }.getOrNull()
+        if (!services.isNullOrEmpty()) return true
+        return runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                context.packageManager.getServiceInfo(
+                    GOOGLE_TTS_RECOGNITION_COMPONENT,
+                    PackageManager.ComponentInfoFlags.of(0L)
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                context.packageManager.getServiceInfo(GOOGLE_TTS_RECOGNITION_COMPONENT, 0)
+            }
+            true
+        }.getOrDefault(false)
     }
 
     private fun reportErrorThrottled(message: String) {
@@ -334,5 +434,16 @@ class JarvisVoiceManager(
     companion object {
         private const val TAG = "JarvisVoice"
         private const val ERROR_THROTTLE_MS = 4000L
+        private const val MAX_RECOGNITION_RESULTS = 3
+        private const val COMPLETE_SILENCE_LENGTH_MS = 1500L
+        private const val POSSIBLY_COMPLETE_SILENCE_LENGTH_MS = 1200L
+        private const val MINIMUM_SPEECH_LENGTH_MS = 1500L
+        private const val WAKE_RESTART_FAST_MS = 150L
+        private const val WAKE_RESTART_DEFAULT_MS = 450L
+        private const val WAKE_RESTART_BACKOFF_MS = 1200L
+        private val GOOGLE_TTS_RECOGNITION_COMPONENT = ComponentName(
+            "com.google.android.tts",
+            "com.google.android.apps.speech.tts.googletts.service.GoogleTTSRecognitionService"
+        )
     }
 }

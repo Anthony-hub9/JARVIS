@@ -33,4 +33,37 @@ class WakeWordMatcherTest {
         assertEquals(WakeWordResult.NotDetected, matcher.match("jarvisito abre spotify"))
         assertEquals(WakeWordResult.NotDetected, matcher.match("   "))
     }
+
+    @Test
+    fun `detects common Spanish STT phonetic variants of jarvis`() {
+        assertEquals(WakeWordResult.Command("qué hora es"), matcher.match("yarvis qué hora es"))
+        assertEquals(WakeWordResult.Command("abre Spotify"), matcher.match("Oye jarbis, abre Spotify"))
+        assertEquals(WakeWordResult.Command("pon música"), matcher.match("harvis pon música"))
+        assertEquals(WakeWordResult.BareWakeWord, matcher.match("garvis"))
+        assertEquals(WakeWordResult.BareWakeWord, matcher.match("charvis"))
+        assertEquals(WakeWordResult.Command("dime el clima"), matcher.match("yarbis, dime el clima"))
+    }
+
+    @Test
+    fun `selectBestMatch prefers wake word candidate in wake-word mode`() {
+        val matches = listOf("oye travis abre whatsapp", "oye yarvis abre whatsapp", "oye jarbis")
+        assertEquals(
+            "oye yarvis abre whatsapp",
+            matcher.selectBestMatch(matches, isWakeWordMode = true)
+        )
+        assertEquals(
+            "oye travis abre whatsapp",
+            matcher.selectBestMatch(matches, isWakeWordMode = false)
+        )
+    }
+
+    @Test
+    fun `selectBestMatch falls back cleanly when no wake word or empty list`() {
+        assertEquals(
+            "primera opción",
+            matcher.selectBestMatch(listOf("primera opción", "segunda opción"), isWakeWordMode = true)
+        )
+        assertEquals("", matcher.selectBestMatch(emptyList(), isWakeWordMode = true))
+        assertEquals("", matcher.selectBestMatch(listOf("   "), isWakeWordMode = false))
+    }
 }

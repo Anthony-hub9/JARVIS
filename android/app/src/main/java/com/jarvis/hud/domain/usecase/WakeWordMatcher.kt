@@ -14,7 +14,10 @@ sealed interface WakeWordResult {
  */
 class WakeWordMatcher {
 
-    private val wakeWordRegex = Regex("""\bjarvis\b""", RegexOption.IGNORE_CASE)
+    private val wakeWordRegex = Regex(
+        """\b(?:jarvis|yarvis|harvis|garvis|jarbis|charvis|yarbis)\b""",
+        RegexOption.IGNORE_CASE
+    )
     private val combiningMarksRegex = Regex("""\p{InCombiningDiacriticalMarks}+""")
 
     fun match(transcript: String): WakeWordResult {
@@ -34,6 +37,19 @@ class WakeWordMatcher {
         } else {
             WakeWordResult.Command(remainder)
         }
+    }
+
+    fun selectBestMatch(matches: List<String>, isWakeWordMode: Boolean): String {
+        if (matches.isEmpty()) return ""
+        if (isWakeWordMode) {
+            val wakeMatch = matches.firstOrNull { candidate ->
+                val trimmed = candidate.trim()
+                trimmed.isNotEmpty() && match(trimmed) != WakeWordResult.NotDetected
+            }
+            if (wakeMatch != null) return wakeMatch.trim()
+        }
+        return matches.firstOrNull { it.isNotBlank() }?.trim()
+            ?: matches.firstOrNull()?.trim().orEmpty()
     }
 
     fun normalizeAccents(input: String): String {

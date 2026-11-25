@@ -399,3 +399,61 @@ async def test_albedo_offline_sapi5_falls_back_to_plain_wav_when_rvc_fails(
     assert audio_bytes == b"SAPI5_WAV"
     assert media_type == "audio/wav"
     assert any("RVC offline boom" in rec.message for rec in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_audio_cache_hit_avoids_edge_tts_and_rvc_second_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pth_file = tmp_path / "albedo.pth"
+    pth_file.write_bytes(b"fake-pth")
+    monkeypatch.setattr(tts_mod, "_ALBEDO_MODEL_PATH", pth_file)
+    monkeypatch.setattr(tts_mod, "_ALBEDO_INDEX_PATH", tmp_path / "albedo.index")
+
+    edge_calls = 0
+    rvc_calls = 0
+
+    class CountingCommunicate:
+        def __init__(self, text: str, voice: str, *, rate: str, pitch: str) -> None:
+            nonlocal edge_calls
+            edge_calls += 1
+
+        async def stream(self):
+            yield {"type": "audio", "data": b"MP3_DATA"}
+
+    class CountingBaseLoader:
+        def __init__(self, **kwargs) -> None:
+            pass
+
+        def apply_conf(self, **kwargs) -> str:
+            return "OK"
+
+        def __call__(self, audio_files, **kwargs):
+            nonlocal rvc_calls
+            rvc_calls += 1
+            out_path = Path(audio_files).with_suffix(".wav")
+            out_path.write_bytes(b"RVC_CACHED_WAV")
+            return [str(out_path)]
+
+    fake_torch = SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: False))
+    fake_rvc_pkg = SimpleNamespace(BaseLoader=CountingBaseLoader)
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setitem(sys.modules, "infer_rvc_python", fake_rvc_pkg)
+
+    engine = LocalTTSEngine(powershell_exe="powershell.exe")
+    with patch("jarvis.voice.tts.edge_tts.Communicate", CountingCommunicate):
+        first = await engine.synthesize_audio("  Hola señor  ", profile="albedo")
+        second = await engine.synthesize_audio("Hola señor", profile="albedo")
+
+    assert first == (b"RVC_CACHED_WAV", "audio/wav")
+    assert second == first
+    assert edge_calls == 1
+    assert rvc_calls == 1
+
+    # Long text (> max_cached_chars=220) must not be cached
+    long_text = "x" * 221
+    with patch("jarvis.voice.tts.edge_tts.Communicate", CountingCommunicate):
+        await engine.synthesize_audio(long_text, profile="jarvis")
+        await engine.synthesize_audio(long_text, profile="jarvis")
+
+    assert edge_calls == 3

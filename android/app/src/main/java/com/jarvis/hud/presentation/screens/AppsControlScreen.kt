@@ -46,6 +46,7 @@ import com.jarvis.hud.designsystem.theme.JarvisCyan
 import com.jarvis.hud.designsystem.theme.JarvisEmerald
 import com.jarvis.hud.designsystem.theme.JarvisOutline
 import com.jarvis.hud.designsystem.theme.JarvisSurface
+import com.jarvis.hud.designsystem.theme.JarvisTextSecondary
 import com.jarvis.hud.domain.model.HubHealth
 import com.jarvis.hud.domain.model.VoiceProfile
 
@@ -64,6 +65,8 @@ fun AppsControlScreen(
     onSelectVoiceProfile: (VoiceProfile) -> Unit,
     notificationAccessEnabled: Boolean = false,
     onOpenNotificationSettings: () -> Unit = {},
+    accessibilityEnabled: Boolean = false,
+    onOpenAccessibilitySettings: () -> Unit = {},
     backgroundServiceEnabled: Boolean = false,
     onToggleBackgroundService: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier
@@ -100,6 +103,8 @@ fun AppsControlScreen(
             MobileCommsCard(
                 notificationAccessEnabled = notificationAccessEnabled,
                 onOpenNotificationSettings = onOpenNotificationSettings,
+                accessibilityEnabled = accessibilityEnabled,
+                onOpenAccessibilitySettings = onOpenAccessibilitySettings,
                 backgroundServiceEnabled = backgroundServiceEnabled,
                 onToggleBackgroundService = onToggleBackgroundService
             )
@@ -251,6 +256,8 @@ private fun HubSettingsCard(
 private fun MobileCommsCard(
     notificationAccessEnabled: Boolean,
     onOpenNotificationSettings: () -> Unit,
+    accessibilityEnabled: Boolean,
+    onOpenAccessibilitySettings: () -> Unit,
     backgroundServiceEnabled: Boolean,
     onToggleBackgroundService: (Boolean) -> Unit
 ) {
@@ -294,6 +301,35 @@ private fun MobileCommsCard(
                         "Gestionar acceso a notificaciones"
                     } else {
                         "Activar acceso a notificaciones"
+                    }
+                )
+            }
+
+            Text(
+                text = if (accessibilityEnabled) {
+                    "Auto-envío WhatsApp (Accesibilidad): Activo"
+                } else {
+                    "Auto-envío WhatsApp (Accesibilidad): Desactivado (opcional)"
+                },
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (accessibilityEnabled) {
+                    JarvisEmerald
+                } else {
+                    JarvisTextSecondary
+                }
+            )
+            Button(
+                onClick = onOpenAccessibilitySettings,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = JarvisCyan,
+                    contentColor = JarvisBg
+                )
+            ) {
+                Text(
+                    if (accessibilityEnabled) {
+                        "Gestionar accesibilidad WhatsApp"
+                    } else {
+                        "Activar auto-envío WhatsApp"
                     }
                 )
             }

@@ -91,11 +91,28 @@ class MainActivity : ComponentActivity() {
                     onOpenNotificationSettings = {
                         startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
                     },
+                    onOpenAccessibilitySettings = {
+                        startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                    },
                     onLaunchCamera = {
                         cameraLauncher.launch(null)
                     }
                 )
             }
+        }
+        handleQuickListenIntent(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleQuickListenIntent(intent)
+    }
+
+    private fun handleQuickListenIntent(intent: Intent?) {
+        if (intent?.getBooleanExtra(EXTRA_QUICK_LISTEN, false) == true) {
+            intent.removeExtra(EXTRA_QUICK_LISTEN)
+            viewModel.onOrbOrMicClicked()
         }
     }
 
@@ -112,6 +129,7 @@ class MainActivity : ComponentActivity() {
     }
 
     companion object {
+        const val EXTRA_QUICK_LISTEN = "jarvis_quick_listen"
         private const val MAX_VISION_WIDTH = 1024
         private const val VISION_JPEG_QUALITY = 82
     }
@@ -119,6 +137,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         viewModel.refreshNotificationAccess()
+        viewModel.refreshAccessibilityAccess()
     }
 
     private fun requestRequiredPermissions() {
@@ -157,6 +176,7 @@ class MainActivity : ComponentActivity() {
 private fun JarvisRootApp(
     viewModel: JarvisViewModel,
     onOpenNotificationSettings: () -> Unit,
+    onOpenAccessibilitySettings: () -> Unit,
     onLaunchCamera: () -> Unit
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -245,6 +265,8 @@ private fun JarvisRootApp(
                     onSelectVoiceProfile = viewModel::updateVoiceProfile,
                     notificationAccessEnabled = state.notificationAccessEnabled,
                     onOpenNotificationSettings = onOpenNotificationSettings,
+                    accessibilityEnabled = state.accessibilityEnabled,
+                    onOpenAccessibilitySettings = onOpenAccessibilitySettings,
                     backgroundServiceEnabled = state.backgroundServiceEnabled,
                     onToggleBackgroundService = viewModel::toggleBackgroundService
                 )

@@ -12,6 +12,7 @@ import com.jarvis.hud.core.platform.JarvisForegroundService
 import com.jarvis.hud.core.platform.NotificationCache
 import com.jarvis.hud.core.platform.PhoneCallController
 import com.jarvis.hud.core.platform.ReminderNotifier
+import com.jarvis.hud.core.platform.isAccessibilityEnabled
 import com.jarvis.hud.data.local.SettingsPrefs
 import com.jarvis.hud.data.network.JarvisApiClient
 import com.jarvis.hud.data.repository.JarvisRepositoryImpl
@@ -53,6 +54,7 @@ data class JarvisUiState(
     val appSearchQuery: String = "",
     val isAppsLoading: Boolean = false,
     val notificationAccessEnabled: Boolean = false,
+    val accessibilityEnabled: Boolean = false,
     val backgroundServiceEnabled: Boolean = false,
     val statusBanner: String? = null
 )
@@ -109,6 +111,7 @@ class JarvisViewModel(
         observeHubEvents()
         repository.connectWebSocket()
         refreshNotificationAccess()
+        refreshAccessibilityAccess()
         refreshHealth()
         refreshAgenda()
         refreshApps()
@@ -406,6 +409,11 @@ class JarvisViewModel(
     fun refreshNotificationAccess() {
         val enabled = NotificationCache.isEnabled(appContext)
         _uiState.update { it.copy(notificationAccessEnabled = enabled) }
+    }
+
+    fun refreshAccessibilityAccess() {
+        val enabled = isAccessibilityEnabled(appContext)
+        _uiState.update { it.copy(accessibilityEnabled = enabled) }
     }
 
     private fun executeMobileAction(action: MobileAction, fallbackResponse: String): String {

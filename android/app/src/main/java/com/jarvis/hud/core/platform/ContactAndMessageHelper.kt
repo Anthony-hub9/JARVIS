@@ -51,6 +51,13 @@ class ContactAndMessageHelper(private val context: Context) {
         val digits = phoneNumber?.replace(Regex("[^0-9]"), "").orEmpty()
 
         return runCatching {
+            fun launchWithAutoSend(intent: Intent) {
+                if (message.isNotBlank()) {
+                    WhatsAppAutoSendArmer.arm()
+                }
+                context.startActivity(intent)
+            }
+
             if (digits.isNotEmpty()) {
                 val uri = Uri.parse("https://wa.me/$digits?text=${Uri.encode(message)}")
                 val directIntent = Intent(Intent.ACTION_VIEW, uri).apply {
@@ -58,12 +65,12 @@ class ContactAndMessageHelper(private val context: Context) {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
                 if (directIntent.resolveActivity(context.packageManager) != null) {
-                    context.startActivity(directIntent)
+                    launchWithAutoSend(directIntent)
                 } else {
                     val fallback = Intent(Intent.ACTION_VIEW, uri).apply {
                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     }
-                    context.startActivity(fallback)
+                    launchWithAutoSend(fallback)
                 }
                 phoneNumber!!
             } else {
@@ -76,9 +83,11 @@ class ContactAndMessageHelper(private val context: Context) {
                 if (shareIntent.resolveActivity(context.packageManager) == null) {
                     throw IllegalStateException("WhatsApp no está instalado en el S24+.")
                 }
-                context.startActivity(shareIntent)
+                launchWithAutoSend(shareIntent)
                 recipient
             }
+        }.onFailure {
+            WhatsAppAutoSendArmer.disarm()
         }
     }
 

@@ -9,6 +9,7 @@ import shutil
 import sys
 import tempfile
 import threading
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
@@ -177,10 +178,16 @@ class LocalTTSEngine:
         max_length: int = 2500,
         timeout: float = 40.0,
         powershell_exe: str | None = None,
+        max_cache_entries: int = 64,
+        max_cached_chars: int = 220,
     ) -> None:
         self.max_length = max_length
         self.timeout = timeout
         self.powershell_exe = powershell_exe
+        self._max_cache_entries = max_cache_entries
+        self._max_cached_chars = max_cached_chars
+        self._audio_cache: OrderedDict[tuple[str, str], tuple[bytes, str]] = OrderedDict()
+        self._cache_lock = threading.Lock()
 
     def _resolve_powershell(self) -> str:
         if sys.platform != "win32" and self.powershell_exe is None:
@@ -284,12 +291,38 @@ class LocalTTSEngine:
             )
             return audio_bytes, media_type
 
+    def _get_cached_audio(
+        self, cache_key: tuple[str, str]
+    ) -> tuple[bytes, str] | None:
+        with self._cache_lock:
+            cached = self._audio_cache.get(cache_key)
+            if cached is not None:
+                self._audio_cache.move_to_end(cache_key)
+            return cached
+
+    def _store_cached_audio(
+        self, cache_key: tuple[str, str], result: tuple[bytes, str]
+    ) -> tuple[bytes, str]:
+        audio_bytes, _media_type = result
+        if audio_bytes and len(cache_key[1]) <= self._max_cached_chars:
+            with self._cache_lock:
+                self._audio_cache[cache_key] = result
+                self._audio_cache.move_to_end(cache_key)
+                while len(self._audio_cache) > self._max_cache_entries:
+                    self._audio_cache.popitem(last=False)
+        return result
+
     async def synthesize_audio(
         self, text: str, profile: str = "jarvis"
     ) -> tuple[bytes, str]:
         """Synthesize *text* using Edge Neural TTS, falling back to local SAPI5 WAV."""
         cleaned = self.validate_text(text)
         profile_key = (profile or "jarvis").strip().lower()
+        cache_key = (profile_key, cleaned)
+        cached = self._get_cached_audio(cache_key)
+        if cached is not None:
+            return cached
+
         selected = VOICE_PROFILES.get(profile_key, VOICE_PROFILES["jarvis"])
 
         if edge_tts is not None:
@@ -306,13 +339,15 @@ class LocalTTSEngine:
                         chunks.append(chunk["data"])
                 mp3_bytes = b"".join(chunks)
                 if mp3_bytes:
-                    return await self._maybe_apply_albedo_rvc(
+                    result = await self._maybe_apply_albedo_rvc(
                         mp3_bytes, "audio/mpeg", profile_key, ".mp3", "edge-tts"
                     )
+                    return self._store_cached_audio(cache_key, result)
             except Exception:
                 pass
 
         wav_bytes = await self.synthesize_wav(cleaned)
-        return await self._maybe_apply_albedo_rvc(
+        result = await self._maybe_apply_albedo_rvc(
             wav_bytes, "audio/wav", profile_key, ".wav", "SAPI5"
         )
+        return self._store_cached_audio(cache_key, result)

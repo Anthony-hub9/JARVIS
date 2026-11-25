@@ -101,6 +101,38 @@ def test_read_local_document_pdf_uses_pypdf_when_available(tmp_path: Path) -> No
     assert text == "Resumen ejecutivo del sistema."
 
 
+def test_read_local_document_multipage_real_pdf(tmp_path: Path) -> None:
+    from pypdf import PdfWriter
+    from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
+
+    pdf_path = tmp_path / "multipage.pdf"
+    writer = PdfWriter()
+
+    for page_text in ("Primera pagina de prueba", "Segunda pagina con datos"):
+        page = writer.add_blank_page(width=300, height=300)
+        font_dict = DictionaryObject(
+            {
+                NameObject("/Type"): NameObject("/Font"),
+                NameObject("/Subtype"): NameObject("/Type1"),
+                NameObject("/BaseFont"): NameObject("/Helvetica"),
+            }
+        )
+        page[NameObject("/Resources")] = DictionaryObject(
+            {NameObject("/Font"): DictionaryObject({NameObject("/F1"): font_dict})}
+        )
+        stream = DecodedStreamObject()
+        stream.set_data(f"BT /F1 12 Tf 20 200 Td ({page_text}) Tj ET".encode("latin-1"))
+        page[NameObject("/Contents")] = writer._add_object(stream)
+
+    with pdf_path.open("wb") as fh:
+        writer.write(fh)
+
+    path, text = read_local_document(str(pdf_path))
+    assert path == pdf_path
+    assert "Primera pagina de prueba" in text
+    assert "Segunda pagina con datos" in text
+
+
 def test_autostart_command_formatting_prefers_pythonw(tmp_path: Path) -> None:
     python_exe = tmp_path / "python.exe"
     pythonw_exe = tmp_path / "pythonw.exe"

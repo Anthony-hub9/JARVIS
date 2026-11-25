@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import sys
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -7,7 +11,11 @@ import numpy as np
 import pytest
 import speech_recognition as sr
 
-from jarvis.voice.listener import WAKE_WORD_REGEX, BackgroundVoiceListener
+from jarvis.voice.listener import (
+    WAKE_WORD_REGEX,
+    BackgroundVoiceListener,
+    OfflineWhisperTranscriber,
+)
 
 
 def test_wake_word_regex_matches_variants_and_ignores_unrelated() -> None:
@@ -189,3 +197,140 @@ def test_listen_loop_handles_missing_microphone_gracefully() -> None:
         listener._listen_loop()
 
     assert listener.is_running is False
+
+
+def test_offline_whisper_transcriber_loads_lazily_and_transcribes_in_memory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    init_calls: list[tuple[str, str, str]] = []
+    transcribe_calls: list[tuple[np.ndarray, dict[str, object]]] = []
+
+    class FakeWhisperModel:
+        def __init__(self, model_size: str, *, device: str, compute_type: str) -> None:
+            init_calls.append((model_size, device, compute_type))
+
+        def transcribe(self, audio_f32: np.ndarray, **kwargs):
+            transcribe_calls.append((audio_f32, kwargs))
+            segments = [
+                SimpleNamespace(text=" Jarvis "),
+                SimpleNamespace(text="   "),
+                SimpleNamespace(text="abre alarma "),
+            ]
+            return segments, SimpleNamespace(language="es")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "faster_whisper",
+        SimpleNamespace(WhisperModel=FakeWhisperModel),
+    )
+
+    transcriber = OfflineWhisperTranscriber()
+    assert init_calls == []
+
+    pcm = np.array([0, 16384, -16384], dtype=np.int16).tobytes()
+    audio = sr.AudioData(pcm, 16000, 2)
+
+    assert transcriber.transcribe(audio) == "Jarvis abre alarma"
+    assert transcriber.transcribe(audio) == "Jarvis abre alarma"
+    assert init_calls == [("small", "cpu", "int8")]
+    assert len(transcribe_calls) == 2
+
+    arr, kwargs = transcribe_calls[0]
+    assert arr.dtype == np.float32
+    assert np.allclose(arr, np.array([0.0, 0.5, -0.5], dtype=np.float32))
+    assert kwargs == {
+        "language": "es",
+        "beam_size": 1,
+        "vad_filter": False,
+        "initial_prompt": "Jarvis, WhatsApp, Isaí, laptop, recordatorio, alarma.",
+    }
+
+
+def test_transcribe_prefers_offline_transcriber_when_enabled() -> None:
+    offline = MagicMock()
+    offline.transcribe.return_value = "Jarvis qué hora es"
+    recognizer = MagicMock()
+
+    listener = BackgroundVoiceListener(
+        recognizer=recognizer,
+        offline_transcriber=offline,
+    )
+    audio = sr.AudioData(b"\x00\x00" * 1600, 16000, 2)
+
+    assert listener.transcribe(audio) == "Jarvis qué hora es"
+    offline.transcribe.assert_called_once_with(audio)
+    recognizer.recognize_google.assert_not_called()
+
+
+def test_transcribe_falls_back_to_google_when_offline_fails() -> None:
+    offline = MagicMock()
+    offline.transcribe.side_effect = RuntimeError("faster_whisper unavailable")
+    recognizer = MagicMock()
+    recognizer.recognize_google.return_value = "Jarvis fallback"
+
+    listener = BackgroundVoiceListener(
+        recognizer=recognizer,
+        offline_transcriber=offline,
+        language="es-MX",
+    )
+    audio = sr.AudioData(b"\x00\x00" * 1600, 16000, 2)
+
+    assert listener.transcribe(audio) == "Jarvis fallback"
+    offline.transcribe.assert_called_once_with(audio)
+    recognizer.recognize_google.assert_called_once_with(audio, language="es-MX")
+
+
+def test_default_listener_prefers_offline_transcriber() -> None:
+    listener = BackgroundVoiceListener()
+    assert listener._use_offline is True
+
+
+def test_offline_whisper_transcriber_is_thread_safe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    init_count = 0
+    active_calls = 0
+    max_concurrent = 0
+    barrier = threading.Barrier(4)
+
+    class FakeWhisperModel:
+        def __init__(self, model_size: str, *, device: str, compute_type: str) -> None:
+            nonlocal init_count
+            init_count += 1
+            time.sleep(0.02)
+
+        def transcribe(self, audio_f32: np.ndarray, **kwargs):
+            nonlocal active_calls, max_concurrent
+            active_calls += 1
+            max_concurrent = max(max_concurrent, active_calls)
+            time.sleep(0.01)
+
+            def _gen():
+                yield SimpleNamespace(text="Jarvis ok")
+                active_calls_dec()
+
+            def active_calls_dec() -> None:
+                nonlocal active_calls
+                active_calls -= 1
+
+            return _gen(), SimpleNamespace(language="es")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "faster_whisper",
+        SimpleNamespace(WhisperModel=FakeWhisperModel),
+    )
+
+    transcriber = OfflineWhisperTranscriber()
+    audio = sr.AudioData(b"\x00\x10" * 400, 16000, 2)
+
+    def _worker() -> str | None:
+        barrier.wait(timeout=2.0)
+        return transcriber.transcribe(audio)
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(lambda _: _worker(), range(4)))
+
+    assert results == ["Jarvis ok"] * 4
+    assert init_count == 1
+    assert max_concurrent == 1

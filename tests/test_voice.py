@@ -165,6 +165,7 @@ async def test_synthesize_audio_falls_back_to_sapi5_on_edge_tts_error() -> None:
 
     with (
         patch("jarvis.voice.tts.edge_tts.Communicate", FailingCommunicate),
+        patch("jarvis.voice.tts._ALBEDO_MODEL_PATH", Path("__nonexistent_albedo__.pth")),
         patch.object(
             engine, "synthesize_wav", new=AsyncMock(return_value=fake_wav)
         ) as wav_mock,

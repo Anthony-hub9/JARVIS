@@ -215,11 +215,17 @@ async def test_albedo_falls_back_when_rvc_raises(
 
 
 @pytest.mark.asyncio
-async def test_jarvis_profile_skips_rvc(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_jarvis_profile_skips_rvc(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pth_file = tmp_path / "albedo.pth"
+    pth_file.write_bytes(b"fake-pth")
+    monkeypatch.setattr(tts_mod, "_ALBEDO_MODEL_PATH", pth_file)
+
     def fail_if_called(*args, **kwargs):
         raise AssertionError("RVC should not run for jarvis profile")
 
-    monkeypatch.setattr(tts_mod, "_convert_mp3_to_rvc_wav", fail_if_called)
+    monkeypatch.setattr(tts_mod, "_convert_audio_to_rvc_wav", fail_if_called)
 
     engine = LocalTTSEngine(powershell_exe="powershell.exe")
     with patch(
@@ -292,3 +298,104 @@ def test_preload_albedo_rvc_handles_exception(
 
     assert tts_mod._rvc_loader is None
     assert any("preload boom" in rec.message for rec in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_albedo_offline_sapi5_runs_rvc_conversion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pth_file = tmp_path / "albedo.pth"
+    pth_file.write_bytes(b"fake-pth")
+    index_file = tmp_path / "albedo.index"
+    index_file.write_bytes(b"fake-index")
+
+    monkeypatch.setattr(tts_mod, "_ALBEDO_MODEL_PATH", pth_file)
+    monkeypatch.setattr(tts_mod, "_ALBEDO_INDEX_PATH", index_file)
+
+    seen_suffixes: list[str] = []
+
+    class FakeBaseLoader:
+        def __init__(self, **kwargs) -> None:
+            pass
+
+        def apply_conf(self, **kwargs) -> str:
+            return "OK"
+
+        def __call__(self, audio_files, **kwargs):
+            in_path = Path(audio_files)
+            seen_suffixes.append(in_path.suffix)
+            assert in_path.read_bytes() == b"SAPI5_WAV"
+            out_path = in_path.with_name("albedo_offline.wav")
+            out_path.write_bytes(b"RVC_OFFLINE_WAV")
+            return [str(out_path)]
+
+    fake_torch = SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: False))
+    fake_rvc_pkg = SimpleNamespace(BaseLoader=FakeBaseLoader)
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setitem(sys.modules, "infer_rvc_python", fake_rvc_pkg)
+
+    engine = LocalTTSEngine(powershell_exe="powershell.exe")
+
+    async def fake_sapi5(_text: str) -> bytes:
+        return b"SAPI5_WAV"
+
+    monkeypatch.setattr(engine, "synthesize_wav", fake_sapi5)
+
+    with patch(
+        "jarvis.voice.tts.edge_tts.Communicate",
+        side_effect=RuntimeError("offline"),
+    ):
+        audio_bytes, media_type = await engine.synthesize_audio(
+            "Modo offline", profile="albedo"
+        )
+
+    assert audio_bytes == b"RVC_OFFLINE_WAV"
+    assert media_type == "audio/wav"
+    assert seen_suffixes == [".wav"]
+
+
+@pytest.mark.asyncio
+async def test_albedo_offline_sapi5_falls_back_to_plain_wav_when_rvc_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    pth_file = tmp_path / "albedo.pth"
+    pth_file.write_bytes(b"fake-pth")
+    monkeypatch.setattr(tts_mod, "_ALBEDO_MODEL_PATH", pth_file)
+    monkeypatch.setattr(tts_mod, "_ALBEDO_INDEX_PATH", tmp_path / "albedo.index")
+
+    class FailingBaseLoader:
+        def __init__(self, **kwargs) -> None:
+            pass
+
+        def apply_conf(self, **kwargs) -> str:
+            return "OK"
+
+        def __call__(self, audio_files, **kwargs):
+            raise RuntimeError("RVC offline boom")
+
+    fake_torch = SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: False))
+    fake_rvc_pkg = SimpleNamespace(BaseLoader=FailingBaseLoader)
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setitem(sys.modules, "infer_rvc_python", fake_rvc_pkg)
+
+    engine = LocalTTSEngine(powershell_exe="powershell.exe")
+
+    async def fake_sapi5(_text: str) -> bytes:
+        return b"SAPI5_WAV"
+
+    monkeypatch.setattr(engine, "synthesize_wav", fake_sapi5)
+
+    with (
+        caplog.at_level(logging.WARNING, logger="jarvis.voice.tts"),
+        patch(
+            "jarvis.voice.tts.edge_tts.Communicate",
+            side_effect=RuntimeError("offline"),
+        ),
+    ):
+        audio_bytes, media_type = await engine.synthesize_audio(
+            "Sin RVC offline", profile="albedo"
+        )
+
+    assert audio_bytes == b"SAPI5_WAV"
+    assert media_type == "audio/wav"
+    assert any("RVC offline boom" in rec.message for rec in caplog.records)

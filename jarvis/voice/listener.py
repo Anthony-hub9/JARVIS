@@ -27,6 +27,66 @@ logger = logging.getLogger(__name__)
 
 WAKE_WORD_REGEX = re.compile(r"\b[jyhg]ar[vb]i[sz]?\b", re.IGNORECASE)
 VALID_VOICE_PROFILES = ("jarvis", "albedo")
+_WHISPER_INITIAL_PROMPT = "Jarvis, WhatsApp, Isaí, laptop, recordatorio, alarma."
+
+
+class OfflineWhisperTranscriber:
+    """Offline Spanish speech-to-text transcriber backed by faster-whisper."""
+
+    def __init__(
+        self,
+        model_size: str = "small",
+        device: str = "cpu",
+        compute_type: str = "int8",
+    ) -> None:
+        self.model_size = model_size
+        self.device = device
+        self.compute_type = compute_type
+        self._model: Any = None
+        self._lock = threading.Lock()
+
+    def _get_model_locked(self) -> Any:
+        if self._model is None:
+            from faster_whisper import WhisperModel
+
+            self._model = WhisperModel(
+                self.model_size,
+                device=self.device,
+                compute_type=self.compute_type,
+            )
+        return self._model
+
+    def _get_model(self) -> Any:
+        if self._model is not None:
+            return self._model
+        with self._lock:
+            return self._get_model_locked()
+
+    def transcribe(self, audio: sr.AudioData) -> str | None:
+        """Transcribe *audio* in-memory to Spanish text without temporary files."""
+        raw_pcm = audio.get_raw_data(convert_rate=16000, convert_width=2)
+        if not raw_pcm:
+            return None
+        audio_f32 = np.frombuffer(raw_pcm, dtype=np.int16).astype(np.float32) / 32768.0
+        if audio_f32.size == 0:
+            return None
+
+        with self._lock:
+            model = self._get_model_locked()
+            segments, _info = model.transcribe(
+                audio_f32,
+                language="es",
+                beam_size=1,
+                vad_filter=False,
+                initial_prompt=_WHISPER_INITIAL_PROMPT,
+            )
+            parts = [
+                seg_text
+                for seg in segments
+                if (seg_text := (getattr(seg, "text", "") or "").strip())
+            ]
+        text = " ".join(parts).strip()
+        return text or None
 
 
 class BackgroundVoiceListener:
@@ -38,6 +98,8 @@ class BackgroundVoiceListener:
         orchestrator_factory: Callable[[], Any] | None = None,
         tts_engine: LocalTTSEngine | None = None,
         recognizer: sr.Recognizer | None = None,
+        offline_transcriber: Any | None = None,
+        prefer_offline: bool = True,
         voice_profile: str = "jarvis",
         language: str = "es-MX",
         sample_rate: int = 16000,
@@ -50,6 +112,11 @@ class BackgroundVoiceListener:
         self._orchestrator_factory = orchestrator_factory
         self.tts_engine = tts_engine
         self.recognizer = recognizer or sr.Recognizer()
+        self._offline_transcriber = offline_transcriber
+        if recognizer is not None and offline_transcriber is None:
+            self._use_offline = False
+        else:
+            self._use_offline = prefer_offline
         self.voice_profile = voice_profile if voice_profile in VALID_VOICE_PROFILES else "jarvis"
         self.language = language
         self.sample_rate = sample_rate
@@ -82,6 +149,11 @@ class BackgroundVoiceListener:
         if self.tts_engine is None:
             self.tts_engine = LocalTTSEngine()
         return self.tts_engine
+
+    def _get_offline_transcriber(self) -> Any:
+        if self._offline_transcriber is None:
+            self._offline_transcriber = OfflineWhisperTranscriber()
+        return self._offline_transcriber
 
     @staticmethod
     def _compute_rms(chunk: np.ndarray) -> float:
@@ -130,7 +202,14 @@ class BackgroundVoiceListener:
         return None
 
     def transcribe(self, audio: sr.AudioData) -> str | None:
-        """Transcribe recorded audio via Google Speech Recognition."""
+        """Transcribe recorded audio offline via faster-whisper, falling back to Google SR."""
+        if self._use_offline:
+            try:
+                text = self._get_offline_transcriber().transcribe(audio)
+                return (text or "").strip() or None
+            except Exception as exc:
+                logger.warning("Offline transcription failed, falling back to Google SR: %s", exc)
+
         try:
             text = self.recognizer.recognize_google(audio, language=self.language)
             return text.strip() or None

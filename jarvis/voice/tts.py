@@ -113,18 +113,20 @@ def preload_albedo_rvc() -> bool:
         return False
 
 
-def _convert_mp3_to_rvc_wav(
-    mp3_bytes: bytes,
+def _convert_audio_to_rvc_wav(
+    audio_bytes: bytes,
     model_path: Path,
     index_path: Path,
+    input_ext: str = ".mp3",
 ) -> bytes:
-    """Convert base MP3 bytes to WAV bytes using the local RVC Albedo model."""
+    """Convert base audio bytes to WAV bytes using the local RVC Albedo model."""
     _ensure_scripts_in_path()
+    ext = input_ext if input_ext.startswith(".") else f".{input_ext}"
     tmp_dir = Path(tempfile.mkdtemp(prefix="jarvis_rvc_"))
-    input_path = tmp_dir / "input.mp3"
+    input_path = tmp_dir / f"input{ext}"
     output_files: list[str] = []
     try:
-        input_path.write_bytes(mp3_bytes)
+        input_path.write_bytes(audio_bytes)
         with _rvc_lock:
             loader = _get_rvc_loader(model_path, index_path)
             output_files = loader(
@@ -150,6 +152,21 @@ def _convert_mp3_to_rvc_wav(
         for out_file in output_files:
             Path(out_file).unlink(missing_ok=True)
         shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def _convert_mp3_to_rvc_wav(
+    mp3_bytes: bytes,
+    model_path: Path,
+    index_path: Path,
+    input_ext: str = ".mp3",
+) -> bytes:
+    """Thin wrapper over `_convert_audio_to_rvc_wav` for backward compatibility."""
+    return _convert_audio_to_rvc_wav(
+        mp3_bytes,
+        model_path,
+        index_path,
+        input_ext=input_ext,
+    )
 
 
 class LocalTTSEngine:
@@ -232,6 +249,41 @@ class LocalTTSEngine:
         finally:
             tmp_path.unlink(missing_ok=True)
 
+    async def _maybe_apply_albedo_rvc(
+        self,
+        audio_bytes: bytes,
+        media_type: str,
+        profile_key: str,
+        input_ext: str,
+        source_label: str,
+    ) -> tuple[bytes, str]:
+        """Apply local Albedo RVC conversion when profile is 'albedo' and model exists."""
+        if profile_key != "albedo":
+            return audio_bytes, media_type
+        if not _ALBEDO_MODEL_PATH.is_file():
+            logger.warning(
+                "Modelo RVC no encontrado en %s; usando audio base %s para 'albedo'.",
+                _ALBEDO_MODEL_PATH,
+                source_label,
+            )
+            return audio_bytes, media_type
+        try:
+            rvc_wav = await asyncio.to_thread(
+                _convert_audio_to_rvc_wav,
+                audio_bytes,
+                _ALBEDO_MODEL_PATH,
+                _ALBEDO_INDEX_PATH,
+                input_ext,
+            )
+            return rvc_wav, "audio/wav"
+        except Exception as exc:
+            logger.warning(
+                "Error en conversión RVC para 'albedo'; usando audio base %s: %s",
+                source_label,
+                exc,
+            )
+            return audio_bytes, media_type
+
     async def synthesize_audio(
         self, text: str, profile: str = "jarvis"
     ) -> tuple[bytes, str]:
@@ -254,29 +306,13 @@ class LocalTTSEngine:
                         chunks.append(chunk["data"])
                 mp3_bytes = b"".join(chunks)
                 if mp3_bytes:
-                    if profile_key == "albedo":
-                        if _ALBEDO_MODEL_PATH.is_file():
-                            try:
-                                wav_bytes = await asyncio.to_thread(
-                                    _convert_mp3_to_rvc_wav,
-                                    mp3_bytes,
-                                    _ALBEDO_MODEL_PATH,
-                                    _ALBEDO_INDEX_PATH,
-                                )
-                                return wav_bytes, "audio/wav"
-                            except Exception as exc:
-                                logger.warning(
-                                    "Error en conversión RVC para 'albedo'; usando audio base edge-tts: %s",
-                                    exc,
-                                )
-                        else:
-                            logger.warning(
-                                "Modelo RVC no encontrado en %s; usando audio base edge-tts para 'albedo'.",
-                                _ALBEDO_MODEL_PATH,
-                            )
-                    return mp3_bytes, "audio/mpeg"
+                    return await self._maybe_apply_albedo_rvc(
+                        mp3_bytes, "audio/mpeg", profile_key, ".mp3", "edge-tts"
+                    )
             except Exception:
                 pass
 
         wav_bytes = await self.synthesize_wav(cleaned)
-        return wav_bytes, "audio/wav"
+        return await self._maybe_apply_albedo_rvc(
+            wav_bytes, "audio/wav", profile_key, ".wav", "SAPI5"
+        )

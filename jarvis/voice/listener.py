@@ -174,7 +174,7 @@ class BackgroundVoiceListener:
             reply = (getattr(result, "response", "") or "").strip()
             if not reply:
                 return None
-            return await self._get_tts().synthesize_audio(reply, profile=self.voice_profile)
+            return await self._get_tts().synthesize_audio(reply[:2500], profile=self.voice_profile)
 
         synthesized = asyncio.run(_handle())
         if synthesized is not None:

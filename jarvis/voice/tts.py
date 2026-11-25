@@ -157,8 +157,8 @@ class LocalTTSEngine:
 
     def __init__(
         self,
-        max_length: int = 800,
-        timeout: float = 20.0,
+        max_length: int = 2500,
+        timeout: float = 40.0,
         powershell_exe: str | None = None,
     ) -> None:
         self.max_length = max_length

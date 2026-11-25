@@ -258,6 +258,7 @@ async def test_orchestrator_executes_clipboard_read_plain_and_summary() -> None:
     assert summarized.tool_result is not None
     assert summarized.tool_result["summarized"] is True
     assert backend.calls[0][0] == "exec-test"
+    assert "máximo 5 oraciones, sin dejar ideas inconclusas" in backend.calls[0][1]
 
 
 @pytest.mark.asyncio
@@ -276,6 +277,8 @@ async def test_orchestrator_executes_document_read_plain_and_summary(tmp_path: P
     assert summarized.response == "Resumen del plan."
     assert summarized.tool_result is not None
     assert summarized.tool_result["summarized"] is True
+    assert backend.calls[0][0] == "exec-test"
+    assert "máximo 5 oraciones, sin dejar ideas inconclusas" in backend.calls[0][1]
 
 
 def test_build_executor_prompt_distinguishes_game_mode_from_general_vision() -> None:

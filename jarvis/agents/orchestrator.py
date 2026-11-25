@@ -239,7 +239,7 @@ class OllamaBackend:
             "prompt": prompt,
             "stream": False,
             "keep_alive": "15m",
-            "options": {"num_predict": 512, "num_ctx": 8192, "repeat_penalty": 1.15},
+            "options": {"num_predict": 768, "num_ctx": 8192, "repeat_penalty": 1.15},
         }
         if images:
             payload["images"] = images
@@ -943,7 +943,7 @@ class DualAgentOrchestrator:
             if summarize:
                 summary = await self.backend.generate(
                     self.executor_model,
-                    f"Resume brevemente en español el siguiente contenido del portapapeles:\n\n{content}",
+                    f"Resume en español en un párrafo completo y claro (máximo 5 oraciones, sin dejar ideas inconclusas) el siguiente contenido del portapapeles:\n\n{content}",
                 )
                 return summary, {"tool": tool_name, "chars": len(content), "summarized": True}
             return (
@@ -966,7 +966,7 @@ class DualAgentOrchestrator:
             if summarize:
                 summary = await self.backend.generate(
                     self.executor_model,
-                    f"Resume brevemente en español el archivo '{path.name}':\n\n{content}",
+                    f"Resume en español en un párrafo completo y claro (máximo 5 oraciones, sin dejar ideas inconclusas) el archivo '{path.name}':\n\n{content}",
                 )
                 return summary, {
                     "tool": tool_name,

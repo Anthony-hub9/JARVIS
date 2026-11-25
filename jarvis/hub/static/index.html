@@ -1153,7 +1153,7 @@
 
       async function speak(text) {
         stopAudio();
-        const trimmed = (text || "").trim().slice(0, 800);
+        const trimmed = (text || "").trim().slice(0, 2500);
         if (!trimmed) {
           setOrbState("idle");
           return;

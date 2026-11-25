@@ -290,7 +290,7 @@ async def test_ollama_backend_includes_repeat_penalty() -> None:
         result = await OllamaBackend().generate("moondream", "Describe", images=["IMG"])
 
     assert result == "ok"
-    assert captured_payload["options"] == {"num_predict": 512, "num_ctx": 8192, "repeat_penalty": 1.15}
+    assert captured_payload["options"] == {"num_predict": 768, "num_ctx": 8192, "repeat_penalty": 1.15}
 
 
 @pytest.mark.asyncio

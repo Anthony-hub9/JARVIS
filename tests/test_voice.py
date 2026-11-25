@@ -176,3 +176,28 @@ async def test_synthesize_audio_falls_back_to_sapi5_on_edge_tts_error() -> None:
     assert audio_bytes == fake_wav
     assert media_type == "audio/wav"
     wav_mock.assert_awaited_once_with("Modo sin conexión")
+
+
+@pytest.mark.asyncio
+async def test_synthesize_audio_accepts_long_summary_up_to_2500_chars() -> None:
+    engine = LocalTTSEngine()
+    assert engine.max_length == 2500
+    assert engine.timeout == 40.0
+
+    long_text = "Resumen completo. " * 138 + "Fin."  # 2488 chars
+    assert 1500 < len(long_text) <= 2500
+    captured: dict[str, str] = {}
+
+    class FakeCommunicate:
+        def __init__(self, text: str, voice: str, *, rate: str, pitch: str) -> None:
+            captured["text"] = text
+
+        async def stream(self):
+            yield {"type": "audio", "data": b"ID3LONG"}
+
+    with patch("jarvis.voice.tts.edge_tts.Communicate", FakeCommunicate):
+        audio_bytes, media_type = await engine.synthesize_audio(long_text, profile="jarvis")
+
+    assert audio_bytes == b"ID3LONG"
+    assert media_type == "audio/mpeg"
+    assert captured["text"] == long_text
